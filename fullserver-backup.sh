@@ -278,6 +278,36 @@ create_archive_backup() {
     return $failed
 }
 
+rotate_backups() {
+    local max_backups=3
+    log "Checking for old backups to rotate (keeping $max_backups most recent)..."
+    
+    # List all backup directories sorted by modification time (oldest first)
+    local backup_dirs=($(find "$NAS_MOUNT_POINT" -maxdepth 1 -type d -name "server_backup_*" -printf "%T@ %p\n" | sort -n | cut -d' ' -f2-))
+    
+    # Calculate how many backups to delete
+    local count=${#backup_dirs[@]}
+    local to_delete=$((count - max_backups))
+    
+    if [ $to_delete -le 0 ]; then
+        log "No backup rotation needed (found $count backup(s))"
+        return 0
+    fi
+    
+    log "Found $count backups, removing $to_delete old backup(s)..."
+    
+    # Delete oldest backups
+    for ((i=0; i<to_delete; i++)); do
+        log "Removing old backup: ${backup_dirs[i]}"
+        rm -rf "${backup_dirs[i]}"
+        if [ $? -ne 0 ]; then
+            log "WARNING: Failed to remove old backup: ${backup_dirs[i]}"
+        fi
+    done
+    
+    log "Backup rotation completed"
+}
+
 # Main execution
 log "Starting backup process..."
 mount_nas
@@ -302,6 +332,10 @@ if [ $direct_backup_status -eq 0 ]; then
         log "Complete backup process finished successfully!"
         # Copy the full log to the backup folder for reference
         cp "$MAIN_LOG" "$BACKUP_FOLDER/backup_log.txt"
+        
+        # Rotate old backups
+        rotate_backups
+        
         exit 0
     else
         log "ERROR: Archive backup process failed!"

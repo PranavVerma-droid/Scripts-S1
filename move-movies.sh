@@ -7,8 +7,8 @@ if ! command -v dialog &> /dev/null; then
 fi
 
 # Configuration
-PLEX1_PATH="/path/to/plex-1"
-PLEX2_PATH="/path/to/plex-2"
+PLEX1_PATH="/plex-1"
+PLEX2_PATH="/plex-2"
 DIALOG_HEIGHT=30
 DIALOG_WIDTH=100
 
