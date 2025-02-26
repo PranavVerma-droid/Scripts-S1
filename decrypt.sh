@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # Usage: ./decrypt.sh <FOLDER_NAME>
+# This script will scan for chunked backups / normal backups and restore them (using the GPG key)
+# Before running this script, make sure you have the appropriate GPG key in your toolchain.
 
 if [ $# -ne 1 ]; then
     echo "Usage: $0 <directory>"
