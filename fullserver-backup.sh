@@ -1,24 +1,22 @@
 #!/bin/bash
 
-# Load credentials from external file
-SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-if [ ! -f "$SCRIPT_DIR/.credentials" ]; then
-    echo "ERROR: Credentials file not found at $SCRIPT_DIR/.credentials"
-    echo "Please Create one and add the following details:"
-    echo ""
-    echo "NAS_IP=\"YOUR-NAS-IP\""
-    echo "NAS_USER=\"YOUR-NAS-USER\""
-    echo "NAS_PASSWORD=\"YOUR-NAS-USER-PASSWORD\""
-    echo ""
-    exit 1
-fi
-source "$SCRIPT_DIR/.credentials"
-
-# NAS Mount Settings
+# 1GB: CHUNK_SIZE=1073741824
+# 2GB: CHUNK_SIZE=2147483648
+# 4GB: CHUNK_SIZE=4294967296
+# 8GB: CHUNK_SIZE=8589934592
+# 5MB: CHUNK_SIZE=5242880
+CHUNK_SIZE=8589934592
+BACKUP_TIMESTAMP="server_backup_$(date +%Y-%m-%d_%H-%M-%S)"
+BACKUP_FOLDER="$NAS_MOUNT_POINT/$BACKUP_TIMESTAMP"
+GPG_RECIPIENT="pranav@verma.net.in"
+MAX_PARALLEL_JOBS=4
 NAS_MOUNT_POINT="/mnt/nas"
 NAS_REMOTE_PATH="//${NAS_IP}/home/Server Backup (db1)"
-
-# Backup Settings
+TEMP_DIR="/tmp/$BACKUP_TIMESTAMP"
+MAIN_LOG="$TEMP_DIR/logs/full-log.log"
+MUTEX_FILE="/tmp/backup_mutex_$$"
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+BACKUP_DIRS_WITHOUT_ARCHIVE=()
 BACKUP_DIRS=(
     "/books"
     "/backups"
@@ -30,26 +28,22 @@ BACKUP_DIRS=(
     "/photos"
 )
 
-BACKUP_DIRS_WITHOUT_ARCHIVE=(
-)
 
-BACKUP_TIMESTAMP="server_backup_$(date +%Y-%m-%d_%H-%M-%S)"
-BACKUP_FOLDER="$NAS_MOUNT_POINT/$BACKUP_TIMESTAMP"
-GPG_RECIPIENT="pranav@verma.net.in"
 
-# Number of parallel processes
-MAX_PARALLEL_JOBS=4
+if [ ! -f "$SCRIPT_DIR/.credentials" ]; then
+    echo "ERROR: Credentials file not found at $SCRIPT_DIR/.credentials"
+    echo "Please Create one and add the following details:"
+    echo ""
+    echo "NAS_IP=\"YOUR-NAS-IP\""
+    echo "NAS_USER=\"YOUR-NAS-USER\""
+    echo "NAS_PASSWORD=\"YOUR-NAS-USER-PASSWORD\""
+    echo ""
+    exit 1
+fi
 
-# Create temp directory structure
-TEMP_DIR="/tmp/$BACKUP_TIMESTAMP"
+source "$SCRIPT_DIR/.credentials"
 mkdir -p "$TEMP_DIR/archives" "$TEMP_DIR/logs" "$TEMP_DIR/status"
-
-# Main log file
-MAIN_LOG="$TEMP_DIR/logs/full-log.log"
 touch "$MAIN_LOG"
-
-# Initialize mutex lock
-MUTEX_FILE="/tmp/backup_mutex_$$"
 touch "$MUTEX_FILE"
 
 log() {
@@ -68,10 +62,8 @@ cleanup() {
     local exit_code=$?
     log "Cleaning up..."
     
-    # Kill all background jobs
     jobs -p | xargs -r kill -SIGTERM 2>/dev/null
     
-    # Wait for all background jobs to finish
     wait 2>/dev/null
     
     if [ $exit_code -ne 0 ]; then
@@ -81,14 +73,12 @@ cleanup() {
         fi
     fi
     
-    # Keep logs for investigation if there was an error
     if [ $exit_code -eq 0 ]; then
         rm -rf "$TEMP_DIR"
     else
         log "Backup failed. Logs are preserved at: $TEMP_DIR/logs/"
     fi
     
-    # Clean up mutex file
     rm -f "$MUTEX_FILE"
     
     exit $exit_code
@@ -178,34 +168,53 @@ process_directory_with_archive() {
     
     local base_name=$(basename "$dir")
     local archive_path="$TEMP_DIR/archives/${base_name}.zip"
-    local encrypted_path="$BACKUP_FOLDER/${base_name}.zip.gpg"
     
     log "Creating archive for $dir..."
     log_to_file "$log_file" "Starting archive creation for: $dir"
     
-    # Capture both stdout and stderr from zip command
     if zip -r -MM "$archive_path" "$dir" > >(tee -a "$log_file") 2>&1; then
         log_to_file "$log_file" "Archive created successfully: $archive_path"
     else
-        # Check if zip actually created a file despite warnings
         if [ ! -f "$archive_path" ] || [ ! -s "$archive_path" ]; then
             log "ERROR: Failed to create archive for $dir"
             log_to_file "$log_file" "ERROR: Failed to create archive for $dir"
             echo "1" > "$status_file"
             return
         fi
-        log "Zip completed with warnings for $dir. Proceeding with encryption..."
-        log_to_file "$log_file" "Zip completed with warnings. Proceeding with encryption."
     fi
+
+    local archive_size=$(stat -c%s "$archive_path")
+    log "Archive size is: $archive_size bytes (Chunk size is: $CHUNK_SIZE bytes)"
     
-    log "Encrypting archive for $dir..."
-    encrypt_file "$archive_path" "$encrypted_path" "$log_file"
-    
-    if [ $? -ne 0 ]; then
-        log "ERROR: Failed to encrypt archive for $dir"
-        failed=1
+    if [ $archive_size -gt $CHUNK_SIZE ]; then
+        log "Archive size ($archive_size bytes) exceeds chunk size ($CHUNK_SIZE bytes). Splitting into chunks..."
+
+        split -b $CHUNK_SIZE "$archive_path" "${archive_path}.chunk."
+        
+        local chunk_failed=0
+        for chunk in "${archive_path}.chunk."*; do
+            local chunk_name=$(basename "$chunk")
+            local encrypted_path="$BACKUP_FOLDER/${base_name}.zip.${chunk_name}.gpg"
+            
+            log "Encrypting chunk: $chunk_name ($(stat -c%s "$chunk") bytes)"
+            encrypt_file "$chunk" "$encrypted_path" "$log_file"
+            if [ $? -ne 0 ]; then
+                log "ERROR: Failed to encrypt chunk: $chunk"
+                chunk_failed=1
+            fi
+            rm -f "$chunk"
+        done
+        
+        if [ $chunk_failed -eq 1 ]; then
+            failed=1
+        fi
     else
-        log_to_file "$log_file" "Backup Done for Folder: $dir"
+        local encrypted_path="$BACKUP_FOLDER/${base_name}.zip.gpg"
+        encrypt_file "$archive_path" "$encrypted_path" "$log_file"
+        if [ $? -ne 0 ]; then
+            log "ERROR: Failed to encrypt archive for $dir"
+            failed=1
+        fi
     fi
     
     rm -f "$archive_path"
@@ -217,23 +226,16 @@ backup_without_archiving() {
     local running_jobs=0
     
     for dir in "${BACKUP_DIRS_WITHOUT_ARCHIVE[@]}"; do
-        # Start a new background process
         process_directory_without_archive "$dir" &
-        
-        # Increment running jobs counter
         ((running_jobs++))
-        
-        # If we've reached max parallel jobs, wait for one to finish
         if [ $running_jobs -ge $MAX_PARALLEL_JOBS ]; then
             wait -n
             ((running_jobs--))
         fi
     done
-    
-    # Wait for remaining jobs to finish
+
     wait
     
-    # Check status files
     local failed=0
     for dir in "${BACKUP_DIRS_WITHOUT_ARCHIVE[@]}"; do
         local status_file="$TEMP_DIR/status/$(basename "$dir")"
@@ -250,23 +252,18 @@ create_archive_backup() {
     local running_jobs=0
     
     for dir in "${BACKUP_DIRS[@]}"; do
-        # Start a new background process
         process_directory_with_archive "$dir" &
-        
-        # Increment running jobs counter
+
         ((running_jobs++))
-        
-        # If we've reached max parallel jobs, wait for one to finish
+
         if [ $running_jobs -ge $MAX_PARALLEL_JOBS ]; then
             wait -n
             ((running_jobs--))
         fi
     done
     
-    # Wait for remaining jobs to finish
     wait
     
-    # Check status files
     local failed=0
     for dir in "${BACKUP_DIRS[@]}"; do
         local status_file="$TEMP_DIR/status/$(basename "$dir")"
@@ -282,10 +279,8 @@ rotate_backups() {
     local max_backups=3
     log "Checking for old backups to rotate (keeping $max_backups most recent)..."
     
-    # List all backup directories sorted by modification time (oldest first)
     local backup_dirs=($(find "$NAS_MOUNT_POINT" -maxdepth 1 -type d -name "server_backup_*" -printf "%T@ %p\n" | sort -n | cut -d' ' -f2-))
     
-    # Calculate how many backups to delete
     local count=${#backup_dirs[@]}
     local to_delete=$((count - max_backups))
     
@@ -296,7 +291,6 @@ rotate_backups() {
     
     log "Found $count backups, removing $to_delete old backup(s)..."
     
-    # Delete oldest backups
     for ((i=0; i<to_delete; i++)); do
         log "Removing old backup: ${backup_dirs[i]}"
         rm -rf "${backup_dirs[i]}"
@@ -308,14 +302,12 @@ rotate_backups() {
     log "Backup rotation completed"
 }
 
-# Main execution
+
 log "Starting backup process..."
 mount_nas
-
-# Create main backup directory
 mkdir -p "$BACKUP_FOLDER"
 
-# Step 1: Process directories without archiving (encrypt individual files)
+
 log "Step 1: Processing directories without archiving..."
 backup_without_archiving
 direct_backup_status=$?
@@ -323,17 +315,13 @@ direct_backup_status=$?
 if [ $direct_backup_status -eq 0 ]; then
     log "Direct file encryption completed successfully."
     
-    # Step 2: Process directories that need archiving
     log "Step 2: Processing directories that need archiving..."
     create_archive_backup
     archive_status=$?
     
     if [ $archive_status -eq 0 ]; then
         log "Complete backup process finished successfully!"
-        # Copy the full log to the backup folder for reference
         cp "$MAIN_LOG" "$BACKUP_FOLDER/backup_log.txt"
-        
-        # Rotate old backups
         rotate_backups
         
         exit 0
