@@ -79,7 +79,7 @@ decrypt_backup() {
         rm -f "$target_path"
         return 1
     fi
-}
+}   
 
     echo "Starting decryption in: $TARGET_DIR"
 
@@ -143,8 +143,10 @@ case "$1" in
             echo "export MAIN_LOG=\"\$TEMP_DIR/logs/full-log.log\""
             echo "export MUTEX_FILE=\"/tmp/backup_mutex_$$\""
             echo ""
-            echo "declare -a BACKUP_DIRS_WITHOUT_ARCHIVE=()"
+            echo -e "\e[33mdeclare -a BACKUP_DIRS_WITHOUT_ARCHIVE=()"
             echo -e "declare -a BACKUP_DIRS=(\n    \"\e[34m/path/to/folder1\e[33m\"\n    \"\e[34m/path/to/folder2\e[33m\"\n)\e[0m"
+            echo ""
+            echo -e "\e[33mdeclare -a BACKUP_FILES=(\n    \"\e[34m/etc/fstab\e[33m\"\n    \"\e[34m/etc/crontab\e[33m\"\n    \"\e[34m/etc/hosts\e[33m\"\n)\e[0m"
             echo ""
             exit 1
         fi
@@ -487,6 +489,37 @@ case "$1" in
             log "Backup rotation completed"
         }
 
+        process_individual_files() {
+            local status_file="$TEMP_DIR/status/individual_files"
+            local log_file="$TEMP_DIR/logs/individual_files.log"
+            local failed=0
+            
+            log "Processing individual files..."
+            
+            for file in "${BACKUP_FILES[@]}"; do
+                if [ ! -f "$file" ]; then
+                    log "WARNING: File $file does not exist, skipping..."
+                    continue
+                fi
+                
+                local base_name=$(basename "$file")
+                local dir_name=$(dirname "$file" | sed 's/^\///')
+                local dest_file="$BACKUP_FOLDER/individual_files/$dir_name/${base_name}.gpg"
+                
+                log_to_file "$log_file" "Processing: $file"
+                encrypt_file "$file" "$dest_file" "$log_file"
+                
+                if [ $? -ne 0 ]; then
+                    log "ERROR: Failed to encrypt $file"
+                    log_to_file "$log_file" "ERROR: Failed to encrypt $file"
+                    failed=1
+                fi
+            done
+            
+            echo "$failed" > "$status_file"
+            return $failed
+        }
+
         log "Starting backup process..."
         if ! mount_nas; then
             log "ERROR: Failed to ensure NAS is mounted and writable"
@@ -498,14 +531,23 @@ case "$1" in
             exit 1
         fi
 
-        log "Step 1: Processing directories without archiving..."
+        log "Step 1: Processing individual files..."
+        process_individual_files
+        files_backup_status=$?
+
+        if [ $files_backup_status -ne 0 ]; then
+            log "ERROR: Individual files backup failed!"
+            exit 1
+        fi
+
+        log "Step 2: Processing directories without archiving..."
         backup_without_archiving
         direct_backup_status=$?
 
         if [ $direct_backup_status -eq 0 ]; then
             log "Direct file encryption completed successfully."
             
-            log "Step 2: Processing directories that need archiving..."
+            log "Step 3: Processing directories that need archiving..."
             create_archive_backup
             archive_status=$?
             
