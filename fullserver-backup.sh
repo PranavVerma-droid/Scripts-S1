@@ -1,50 +1,54 @@
 #!/bin/bash
 
-# 1GB: CHUNK_SIZE=1073741824
-# 2GB: CHUNK_SIZE=2147483648
-# 4GB: CHUNK_SIZE=4294967296
-# 8GB: CHUNK_SIZE=8589934592
-# 5MB: CHUNK_SIZE=5242880
-CHUNK_SIZE=8589934592
-BACKUP_TIMESTAMP="server_backup_$(date +%Y-%m-%d_%H-%M-%S)"
-BACKUP_FOLDER="$NAS_MOUNT_POINT/$BACKUP_TIMESTAMP"
-GPG_RECIPIENT="pranav@verma.net.in"
-MAX_PARALLEL_JOBS=4
-NAS_MOUNT_POINT="/mnt/nas"
-NAS_REMOTE_PATH="//${NAS_IP}/home/Server Backup (db1)"
-TEMP_DIR="/tmp/$BACKUP_TIMESTAMP"
-MAIN_LOG="$TEMP_DIR/logs/full-log.log"
-MUTEX_FILE="/tmp/backup_mutex_$$"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-BACKUP_DIRS_WITHOUT_ARCHIVE=()
-BACKUP_DIRS=(
-    "/books"
-    "/backups"
-    "/scripts"
-    "/songs"
-    "/servers"
-    "/github"
-    "/var/www"
-    "/photos"
-)
-
-
 
 if [ ! -f "$SCRIPT_DIR/.credentials" ]; then
-    echo "ERROR: Credentials file not found at $SCRIPT_DIR/.credentials"
-    echo "Please Create one and add the following details:"
+    echo -e "\e[31mERROR: Credentials file not found at $SCRIPT_DIR/.credentials\e[0m"
+    echo -e "\e[1mPlease Create one and add the following details:\e[0m"
     echo ""
-    echo "NAS_IP=\"YOUR-NAS-IP\""
-    echo "NAS_USER=\"YOUR-NAS-USER\""
-    echo "NAS_PASSWORD=\"YOUR-NAS-USER-PASSWORD\""
+    echo -e "\e[33mNAS_IP=\"\e[34mYOUR-NAS-IP\e[33m\""
+    echo -e "NAS_USER=\"\e[34mYOUR-NAS-USER\e[33m\""
+    echo -e "NAS_PASSWORD=\"\e[34mYOUR-NAS-USER-PASSWORD\e[33m\""
+    echo ""
+    echo "export CHUNK_SIZE=8589934592"
+    echo "export BACKUP_TIMESTAMP=\"server_backup_\$(date +%Y-%m-%d_%H-%M-%S)\""
+    echo $'export NAS_MOUNT_POINT="\e[34m/mnt/nas\e[33m"'
+    echo "export NAS_REMOTE_PATH=\"//\${NAS_IP}/home/Server Backup (db1)\""
+    echo "export BACKUP_FOLDER=\"\$NAS_MOUNT_POINT/\$BACKUP_TIMESTAMP\""
+    echo -e "export GPG_RECIPIENT=\"\e[34mYOUR-GPG-KEY-EMAIL@gmail.com\e[33m\""
+    echo "export MAX_PARALLEL_JOBS=4"
+    echo "export TEMP_DIR=\"/tmp/\$BACKUP_TIMESTAMP\""
+    echo "export MAIN_LOG=\"\$TEMP_DIR/logs/full-log.log\""
+    echo "export MUTEX_FILE=\"/tmp/backup_mutex_$$\""
+    echo ""
+    echo "declare -a BACKUP_DIRS_WITHOUT_ARCHIVE=()"
+    echo -e "declare -a BACKUP_DIRS=(\n    \"\e[34m/path/to/folder1\e[33m\"\n    \"\e[34m/path/to/folder2\e[33m\"\n)\e[0m"
     echo ""
     exit 1
 fi
 
 source "$SCRIPT_DIR/.credentials"
-mkdir -p "$TEMP_DIR/archives" "$TEMP_DIR/logs" "$TEMP_DIR/status"
-touch "$MAIN_LOG"
-touch "$MUTEX_FILE"
+
+if [ -f "$MUTEX_FILE" ]; then
+    echo "ERROR: Another backup process appears to be running"
+    exit 1
+fi
+
+if ! mkdir -p "$TEMP_DIR/archives" "$TEMP_DIR/logs" "$TEMP_DIR/status"; then
+    echo "ERROR: Failed to create temporary directories"
+    exit 1
+fi
+
+if ! touch "$MAIN_LOG" "$MUTEX_FILE"; then
+    echo "ERROR: Failed to create log or mutex files"
+    rm -rf "$TEMP_DIR"
+    exit 1
+fi
+
+if ! gpg --list-keys "$GPG_RECIPIENT" >/dev/null 2>&1; then
+    log "ERROR: GPG recipient key not found: $GPG_RECIPIENT"
+    exit 1
+fi
 
 log() {
     local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
@@ -86,20 +90,81 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
+verify_nas_mount() {
+    if ! mountpoint -q "$NAS_MOUNT_POINT"; then
+        log "ERROR: NAS is not mounted at $NAS_MOUNT_POINT"
+        return 1
+    fi
+    
+    if ! test -w "$NAS_MOUNT_POINT"; then
+        log "ERROR: Cannot write to NAS mount point $NAS_MOUNT_POINT"
+        return 1
+    fi
+    
+    local test_file="$NAS_MOUNT_POINT/.write_test_$$"
+    if ! touch "$test_file" 2>/dev/null; then
+        log "ERROR: Failed to create test file on NAS"
+        return 1
+    fi
+    rm -f "$test_file"
+    
+    local available_space=$(df -P "$NAS_MOUNT_POINT" | awk 'NR==2 {print $4}')
+    if [ "$available_space" -lt 5242880 ]; then  # 5GB minimum
+        log "ERROR: Insufficient space on NAS (less than 5GB available)"
+        return 1
+    fi
+    
+    return 0
+}
+
+verify_backup_paths() {
+    log "Verifying backup paths..."
+    
+    # Check NAS mount point
+    if [ ! -d "$NAS_MOUNT_POINT" ]; then
+        if ! mkdir -p "$NAS_MOUNT_POINT"; then
+            log "ERROR: Cannot create NAS mount point: $NAS_MOUNT_POINT"
+            return 1
+        fi
+    fi
+    
+    # Create and verify backup folder
+    log "Creating backup folder: $BACKUP_FOLDER"
+    if ! mkdir -p "$BACKUP_FOLDER"; then
+        log "ERROR: Cannot create backup folder: $BACKUP_FOLDER"
+        return 1
+    fi
+    
+    if [ ! -w "$BACKUP_FOLDER" ]; then
+        log "ERROR: Backup folder is not writable: $BACKUP_FOLDER"
+        return 1
+    fi
+    
+    log "Backup paths verified successfully"
+    return 0
+}
+
 mount_nas() {
     log "Checking if NAS is already mounted..."
-    if mountpoint -q "$NAS_MOUNT_POINT"; then
-        log "NAS is already mounted. Skipping mount."
-        return
+    
+    if verify_nas_mount; then
+        log "NAS is already mounted and writable"
+        return 0
     fi
     
     log "Mounting NAS at $NAS_MOUNT_POINT..."
-    sudo mount -t cifs "$NAS_REMOTE_PATH" "$NAS_MOUNT_POINT" -o username="$NAS_USER",password="$NAS_PASSWORD",iocharset=utf8,file_mode=0777,dir_mode=0777
-    if [ $? -ne 0 ]; then
-        log "ERROR: Failed to mount NAS! Exiting..."
-        exit 1
+    if ! sudo mount -t cifs "$NAS_REMOTE_PATH" "$NAS_MOUNT_POINT" -o "username=$NAS_USER,password=$NAS_PASSWORD,iocharset=utf8,file_mode=0777,dir_mode=0777"; then
+        log "ERROR: Failed to mount NAS!"
+        return 1
     fi
-    log "NAS mounted successfully."
+    
+    if ! verify_nas_mount; then
+        log "ERROR: NAS mount verification failed after mounting"
+        return 1
+    fi
+    
+    log "NAS mounted successfully"
+    return 0
 }
 
 encrypt_file() {
@@ -304,9 +369,15 @@ rotate_backups() {
 
 
 log "Starting backup process..."
-mount_nas
-mkdir -p "$BACKUP_FOLDER"
+if ! mount_nas; then
+    log "ERROR: Failed to ensure NAS is mounted and writable"
+    exit 1
+fi
 
+if ! verify_backup_paths; then
+    log "ERROR: Failed to verify and create required paths"
+    exit 1
+fi
 
 log "Step 1: Processing directories without archiving..."
 backup_without_archiving
