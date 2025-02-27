@@ -140,7 +140,7 @@ case "$1" in
             echo -e "export GPG_RECIPIENT=\"\e[34mYOUR-GPG-KEY-EMAIL@gmail.com\e[33m\""
             echo "export MAX_PARALLEL_JOBS=4"
             echo "export TEMP_DIR=\"/tmp/\$BACKUP_TIMESTAMP\""
-            echo "export MAIN_LOG=\"\$TEMP_DIR/logs/full-log.log\""
+            echo "export MAIN_LOG=\"\$TEMP_DIR/logs/backup_main.log\""
             echo "export MUTEX_FILE=\"/tmp/backup_mutex_$$\""
             echo ""
             echo -e "\e[33mdeclare -a BACKUP_DIRS_WITHOUT_ARCHIVE=()"
@@ -176,14 +176,26 @@ case "$1" in
 
         log() {
             local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
-            flock "$MUTEX_FILE" echo "[$timestamp] $1" | tee -a "$MAIN_LOG"
+            local log_level="INFO"
+            if [[ "$1" == ERROR* ]]; then
+                log_level="ERROR"
+            elif [[ "$1" == WARNING* ]]; then
+                log_level="WARNING"
+            fi
+            flock "$MUTEX_FILE" echo "[$timestamp] [$log_level] $1" | tee -a "$MAIN_LOG"
         }
 
         log_to_file() {
             local file="$1"
             local message="$2"
             local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
-            flock "$MUTEX_FILE" echo "[$timestamp] $message" >> "$file"
+            local log_level="INFO"
+            if [[ "$message" == ERROR* ]]; then
+                log_level="ERROR"
+            elif [[ "$message" == WARNING* ]]; then
+                log_level="WARNING"
+            fi
+            flock "$MUTEX_FILE" echo "[$timestamp] [$log_level] $message" >> "$file"
         }
 
         cleanup() {
@@ -309,8 +321,8 @@ case "$1" in
 
         process_directory_without_archive() {
             local dir="$1"
-            local status_file="$TEMP_DIR/status/$(basename "$dir")"
-            local log_file="$TEMP_DIR/logs/$(basename "$dir")_backup.log"
+            local status_file="$TEMP_DIR/status/$(basename "$dir").status"
+            local log_file="$TEMP_DIR/logs/backup_$(basename "$dir").log"
             local failed=0
             
             if [ ! -d "$dir" ]; then
@@ -347,8 +359,8 @@ case "$1" in
 
         process_directory_with_archive() {
             local dir="$1"
-            local status_file="$TEMP_DIR/status/$(basename "$dir")"
-            local log_file="$TEMP_DIR/logs/$(basename "$dir")_archive.log"
+            local status_file="$TEMP_DIR/status/$(basename "$dir").status"
+            local log_file="$TEMP_DIR/logs/backup_$(basename "$dir").log"
             local failed=0
             
             if [ ! -d "$dir" ]; then
@@ -447,7 +459,7 @@ case "$1" in
             
             local failed=0
             for dir in "${BACKUP_DIRS_WITHOUT_ARCHIVE[@]}"; do
-                local status_file="$TEMP_DIR/status/$(basename "$dir")"
+                local status_file="$TEMP_DIR/status/$(basename "$dir").status"
                 if [ -f "$status_file" ] && [ "$(cat "$status_file")" != "0" ]; then
                     failed=1
                 fi
@@ -475,7 +487,7 @@ case "$1" in
             
             local failed=0
             for dir in "${BACKUP_DIRS[@]}"; do
-                local status_file="$TEMP_DIR/status/$(basename "$dir")"
+                local status_file="$TEMP_DIR/status/$(basename "$dir").status"
                 if [ -f "$status_file" ] && [ "$(cat "$status_file")" != "0" ]; then
                     failed=1
                 fi
@@ -512,29 +524,31 @@ case "$1" in
         }
 
         process_individual_files() {
-            local status_file="$TEMP_DIR/status/individual_files"
-            local log_file="$TEMP_DIR/logs/individual_files.log"
+            local status_file="$TEMP_DIR/status/files.status"
+            local log_file="$TEMP_DIR/logs/backup_files.log"
             local failed=0
             
-            log "Processing individual files..."
+            log "Processing individual system files..."
             
             for file in "${BACKUP_FILES[@]}"; do
                 if [ ! -f "$file" ]; then
-                    log "WARNING: File $file does not exist, skipping..."
+                    log "WARNING: System file $file does not exist, skipping..."
                     continue
                 fi
                 
                 local base_name=$(basename "$file")
                 local dir_name=$(dirname "$file" | sed 's/^\///')
-                local dest_file="$BACKUP_FOLDER/individual_files/$dir_name/${base_name}.gpg"
+                local dest_file="$BACKUP_FOLDER/files/$dir_name/${base_name}.gpg"
                 
-                log_to_file "$log_file" "Processing: $file"
+                log_to_file "$log_file" "Processing system file: $file"
                 encrypt_file "$file" "$dest_file" "$log_file"
                 
                 if [ $? -ne 0 ]; then
-                    log "ERROR: Failed to encrypt $file"
-                    log_to_file "$log_file" "ERROR: Failed to encrypt $file"
+                    log "ERROR: Failed to encrypt system file: $file"
+                    log_to_file "$log_file" "ERROR: Failed to encrypt system file: $file"
                     failed=1
+                else
+                    log_to_file "$log_file" "Successfully processed system file: $file"
                 fi
             done
             
