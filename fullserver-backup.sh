@@ -296,7 +296,9 @@ case "$1" in
             
             mkdir -p "$(dirname "$dest")"
             
-            if gpg --batch --yes --encrypt --sign --recipient "$GPG_RECIPIENT" --output "$dest" "$src" 2>> "$log_file"; then
+            # Show progress while encrypting
+            if pv -N "Encrypting $(basename "$src")" "$src" | \
+                gpg --batch --yes --encrypt --sign --recipient "$GPG_RECIPIENT" --output "$dest" 2>> "$log_file"; then
                 log_to_file "$log_file" "Successfully encrypted: $src -> $dest"
                 return 0
             else
@@ -341,6 +343,8 @@ case "$1" in
             echo "$failed" > "$status_file"
         }
 
+        MAX_ZIP_THREADS=$(nproc)
+
         process_directory_with_archive() {
             local dir="$1"
             local status_file="$TEMP_DIR/status/$(basename "$dir")"
@@ -359,53 +363,71 @@ case "$1" in
             log "Creating archive for $dir..."
             log_to_file "$log_file" "Starting archive creation for: $dir"
             
-            if zip -r -MM "$archive_path" "$dir" > >(tee -a "$log_file") 2>&1; then
+            # Fixed zip command - removed -P parameter and added proper error handling
+            if zip -r -1 "$archive_path" "$dir" 2>> "$log_file"; then
                 log_to_file "$log_file" "Archive created successfully: $archive_path"
-            else
-                if [ ! -f "$archive_path" ] || [ ! -s "$archive_path" ]; then
-                    log "ERROR: Failed to create archive for $dir"
-                    log_to_file "$log_file" "ERROR: Failed to create archive for $dir"
-                    echo "1" > "$status_file"
-                    return
-                fi
-            fi
-
-            local archive_size=$(stat -c%s "$archive_path")
-            log "Archive size is: $archive_size bytes (Chunk size is: $CHUNK_SIZE bytes)"
-            
-            if [ $archive_size -gt $CHUNK_SIZE ]; then
-                log "Archive size ($archive_size bytes) exceeds chunk size ($CHUNK_SIZE bytes). Splitting into chunks..."
-
-                split -b $CHUNK_SIZE "$archive_path" "${archive_path}.chunk."
                 
-                local chunk_failed=0
-                for chunk in "${archive_path}.chunk."*; do
-                    local chunk_name=$(basename "$chunk")
-                    local encrypted_path="$BACKUP_FOLDER/${base_name}.zip.${chunk_name}.gpg"
+                if [ -f "$archive_path" ] && [ -s "$archive_path" ]; then
+                    local archive_size=$(stat -c%s "$archive_path")
+                    log "Archive size is: $archive_size bytes (Chunk size is: $CHUNK_SIZE bytes)"
                     
-                    log "Encrypting chunk: $chunk_name ($(stat -c%s "$chunk") bytes)"
-                    encrypt_file "$chunk" "$encrypted_path" "$log_file"
-                    if [ $? -ne 0 ]; then
-                        log "ERROR: Failed to encrypt chunk: $chunk"
-                        chunk_failed=1
+                    if [ -n "$archive_size" ] && [ "$archive_size" -gt "$CHUNK_SIZE" ]; then
+                        log "Archive size ($archive_size bytes) exceeds chunk size ($CHUNK_SIZE bytes). Splitting into chunks..."
+                        
+                        # Create chunks directory
+                        local chunks_dir="$TEMP_DIR/archives/chunks_$$"
+                        mkdir -p "$chunks_dir"
+                        
+                        # Split with numeric suffix
+                        split -b "$CHUNK_SIZE" -d "$archive_path" "${chunks_dir}/${base_name}.chunk."
+                        
+                        local chunk_failed=0
+                        for chunk in "${chunks_dir}/${base_name}.chunk."*; do
+                            if [ ! -f "$chunk" ]; then
+                                continue
+                            fi
+                            
+                            local chunk_name=$(basename "$chunk")
+                            local encrypted_path="$BACKUP_FOLDER/${base_name}/${chunk_name}.gpg"
+                            
+                            mkdir -p "$(dirname "$encrypted_path")"
+                            
+                            log "Encrypting chunk: $chunk_name ($(stat -c%s "$chunk") bytes)"
+                            if ! encrypt_file "$chunk" "$encrypted_path" "$log_file"; then
+                                log "ERROR: Failed to encrypt chunk: $chunk"
+                                chunk_failed=1
+                                break
+                            fi
+                            rm -f "$chunk"
+                        done
+                        
+                        rm -rf "$chunks_dir"
+                        
+                        if [ $chunk_failed -eq 1 ]; then
+                            failed=1
+                            # Clean up partial backup
+                            rm -rf "$BACKUP_FOLDER/${base_name}"
+                        fi
+                    else
+                        local encrypted_path="$BACKUP_FOLDER/${base_name}.zip.gpg"
+                        if ! encrypt_file "$archive_path" "$encrypted_path" "$log_file"; then
+                            log "ERROR: Failed to encrypt archive for $dir"
+                            failed=1
+                        fi
                     fi
-                    rm -f "$chunk"
-                done
-                
-                if [ $chunk_failed -eq 1 ]; then
+                else
+                    log "ERROR: Archive creation failed or archive is empty"
                     failed=1
                 fi
             else
-                local encrypted_path="$BACKUP_FOLDER/${base_name}.zip.gpg"
-                encrypt_file "$archive_path" "$encrypted_path" "$log_file"
-                if [ $? -ne 0 ]; then
-                    log "ERROR: Failed to encrypt archive for $dir"
-                    failed=1
-                fi
+                log "ERROR: Failed to create archive for $dir"
+                log_to_file "$log_file" "ERROR: Failed to create archive for $dir"
+                failed=1
             fi
             
             rm -f "$archive_path"
             echo "$failed" > "$status_file"
+            return $failed
         }
 
         backup_without_archiving() {
@@ -520,51 +542,105 @@ case "$1" in
             return $failed
         }
 
-        log "Starting backup process..."
-        if ! mount_nas; then
-            log "ERROR: Failed to ensure NAS is mounted and writable"
-            exit 1
-        fi
-
-        if ! verify_backup_paths; then
-            log "ERROR: Failed to verify and create required paths"
-            exit 1
-        fi
-
-        log "Step 1: Processing individual files..."
-        process_individual_files
-        files_backup_status=$?
-
-        if [ $files_backup_status -ne 0 ]; then
-            log "ERROR: Individual files backup failed!"
-            exit 1
-        fi
-
-        log "Step 2: Processing directories without archiving..."
-        backup_without_archiving
-        direct_backup_status=$?
-
-        if [ $direct_backup_status -eq 0 ]; then
-            log "Direct file encryption completed successfully."
+        calculate_total_size() {
+            log "Calculating total backup size..."
+            local total_size=0
             
-            log "Step 3: Processing directories that need archiving..."
-            create_archive_backup
-            archive_status=$?
+            # Calculate size of individual files
+            for file in "${BACKUP_FILES[@]}"; do
+                if [ -f "$file" ]; then
+                    local size=$(stat -c%s "$file")
+                    total_size=$((total_size + size))
+                fi
+            done
             
-            if [ $archive_status -eq 0 ]; then
-                log "Complete backup process finished successfully!"
-                cp "$MAIN_LOG" "$BACKUP_FOLDER/backup_log.txt"
-                rotate_backups
-                
-                exit 0
+            # Calculate size of directories
+            for dir in "${BACKUP_DIRS[@]}"; do
+                if [ -d "$dir" ]; then
+                    local size=$(du -sb "$dir" | cut -f1)
+                    total_size=$((total_size + size))
+                fi
+            done
+            
+            echo $total_size
+        }
+
+        save_checkpoint() {
+            echo "$1" > "$CHECKPOINT_FILE"
+            log "Saved checkpoint: $1"
+        }
+
+        load_checkpoint() {
+            if [ -f "$CHECKPOINT_FILE" ]; then
+                cat "$CHECKPOINT_FILE"
             else
-                log "ERROR: Archive backup process failed!"
-                exit 2
+                echo "start"
             fi
-        else
-            log "ERROR: Direct file encryption process failed!"
-            exit 1
-        fi
+        }
+
+        log "Starting backup process..."
+
+        # Calculate total size and estimate time
+        TOTAL_SIZE=$(calculate_total_size)
+        log "Total estimated backup size: $(numfmt --to=iec-i --suffix=B $TOTAL_SIZE)"
+        log "Estimated completion time: $(echo "$TOTAL_SIZE/1024/1024" | bc) minutes (rough estimate)"
+
+        CHECKPOINT=$(load_checkpoint)
+
+        case "$CHECKPOINT" in
+            "start"|"")
+                if ! mount_nas; then
+                    log "ERROR: Failed to ensure NAS is mounted and writable"
+                    exit 1
+                fi
+                save_checkpoint "mounted"
+                ;&
+            "mounted")
+                if ! verify_backup_paths; then
+                    log "ERROR: Failed to verify and create required paths"
+                    exit 1
+                fi
+                save_checkpoint "verified"
+                ;&
+            "verified")
+                log "Step 1: Processing individual files..."
+                process_individual_files
+                files_backup_status=$?
+                if [ $files_backup_status -eq 0 ]; then
+                    save_checkpoint "files_done"
+                else
+                    log "ERROR: Individual files backup failed!"
+                    exit 1
+                fi
+                ;&
+            "files_done")
+                log "Step 2: Processing directories without archiving..."
+                backup_without_archiving
+                direct_backup_status=$?
+                if [ $direct_backup_status -eq 0 ]; then
+                    save_checkpoint "direct_done"
+                else
+                    log "ERROR: Direct file encryption process failed!"
+                    exit 1
+                fi
+                ;&
+            "direct_done")
+                log "Step 3: Processing directories that need archiving..."
+                create_archive_backup
+                archive_status=$?
+                if [ $archive_status -eq 0 ]; then
+                    save_checkpoint "complete"
+                    log "Complete backup process finished successfully!"
+                    cp "$MAIN_LOG" "$BACKUP_FOLDER/backup_log.txt"
+                    rotate_backups
+                    rm -f "$CHECKPOINT_FILE"
+                    exit 0
+                else
+                    log "ERROR: Archive backup process failed!"
+                    exit 2
+                fi
+                ;;
+        esac
         ;;
 
     --decrypt)
