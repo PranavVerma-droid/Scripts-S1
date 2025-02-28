@@ -139,6 +139,7 @@ case "$1" in
             echo "export BACKUP_FOLDER=\"\$NAS_MOUNT_POINT/\$BACKUP_TIMESTAMP\""
             echo -e "export GPG_RECIPIENT=\"\e[34mYOUR-GPG-KEY-EMAIL@gmail.com\e[33m\""
             echo "export MAX_PARALLEL_JOBS=4"
+            echo "export MAX_BACKUPS=3"
             echo "export TEMP_DIR=\"/tmp/\$BACKUP_TIMESTAMP\""
             echo "export MAIN_LOG=\"\$TEMP_DIR/logs/backup_main.log\""
             echo "export MUTEX_FILE=\"/tmp/backup_mutex_$$\""
@@ -374,8 +375,7 @@ case "$1" in
             
             log "Creating archive for $dir..."
             log_to_file "$log_file" "Starting archive creation for: $dir"
-            
-            # Fixed zip command - removed -P parameter and added proper error handling
+
             if zip -r -1 "$archive_path" "$dir" 2>> "$log_file"; then
                 log_to_file "$log_file" "Archive created successfully: $archive_path"
                 
@@ -385,12 +385,10 @@ case "$1" in
                     
                     if [ -n "$archive_size" ] && [ "$archive_size" -gt "$CHUNK_SIZE" ]; then
                         log "Archive size ($archive_size bytes) exceeds chunk size ($CHUNK_SIZE bytes). Splitting into chunks..."
-                        
-                        # Create chunks directory
+
                         local chunks_dir="$TEMP_DIR/archives/chunks_$$"
                         mkdir -p "$chunks_dir"
-                        
-                        # Split with numeric suffix
+
                         split -b "$CHUNK_SIZE" -d "$archive_path" "${chunks_dir}/${base_name}.chunk."
                         
                         local chunk_failed=0
@@ -417,7 +415,6 @@ case "$1" in
                         
                         if [ $chunk_failed -eq 1 ]; then
                             failed=1
-                            # Clean up partial backup
                             rm -rf "$BACKUP_FOLDER/${base_name}"
                         fi
                     else
@@ -497,13 +494,12 @@ case "$1" in
         }
 
         rotate_backups() {
-            local max_backups=3
-            log "Checking for old backups to rotate (keeping $max_backups most recent)..."
+            log "Checking for old backups to rotate (keeping $MAX_BACKUPS most recent)..."
             
             local backup_dirs=($(find "$NAS_MOUNT_POINT" -maxdepth 1 -type d -name "server_backup_*" -printf "%T@ %p\n" | sort -n | cut -d' ' -f2-))
             
             local count=${#backup_dirs[@]}
-            local to_delete=$((count - max_backups))
+            local to_delete=$((count - MAX_BACKUPS))
             
             if [ $to_delete -le 0 ]; then
                 log "No backup rotation needed (found $count backup(s))"
@@ -559,16 +555,14 @@ case "$1" in
         calculate_total_size() {
             log "Calculating total backup size..."
             local total_size=0
-            
-            # Calculate size of individual files
+
             for file in "${BACKUP_FILES[@]}"; do
                 if [ -f "$file" ]; then
                     local size=$(stat -c%s "$file")
                     total_size=$((total_size + size))
                 fi
             done
-            
-            # Calculate size of directories
+
             for dir in "${BACKUP_DIRS[@]}"; do
                 if [ -d "$dir" ]; then
                     local size=$(du -sb "$dir" | cut -f1)
@@ -594,7 +588,6 @@ case "$1" in
 
         log "Starting backup process..."
 
-        # Calculate total size and estimate time
         TOTAL_SIZE=$(calculate_total_size)
         log "Total estimated backup size: $(numfmt --to=iec-i --suffix=B $TOTAL_SIZE)"
         log "Estimated completion time: $(echo "$TOTAL_SIZE/1024/1024" | bc) minutes (rough estimate)"
