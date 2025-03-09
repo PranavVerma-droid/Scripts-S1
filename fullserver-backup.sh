@@ -132,6 +132,7 @@ case "$1" in
             echo -e "NAS_USER=\"\e[34mYOUR-NAS-USER\e[33m\""
             echo -e "NAS_PASSWORD=\"\e[34mYOUR-NAS-USER-PASSWORD\e[33m\""
             echo ""
+            echo -e "export ENCRYPT_FILES=\e[34mtrue\e[33m"
             echo "export CHUNK_SIZE=8589934592"
             echo "export BACKUP_TIMESTAMP=\"server_backup_\$(date +%Y-%m-%d_%H-%M-%S)\""
             echo $'export NAS_MOUNT_POINT="\e[34m/mnt/nas\e[33m"'
@@ -170,7 +171,7 @@ case "$1" in
             exit 1
         fi
 
-        if ! gpg --list-keys "$GPG_RECIPIENT" >/dev/null 2>&1; then
+        if $ENCRYPT_FILES && ! gpg --list-keys "$GPG_RECIPIENT" >/dev/null 2>&1; then
             log "ERROR: GPG recipient key not found: $GPG_RECIPIENT"
             exit 1
         fi
@@ -309,14 +310,25 @@ case "$1" in
             
             mkdir -p "$(dirname "$dest")"
             
-            # Show progress while encrypting
-            if pv -N "Encrypting $(basename "$src")" "$src" | \
-                gpg --batch --yes --encrypt --sign --recipient "$GPG_RECIPIENT" --output "$dest" 2>> "$log_file"; then
-                log_to_file "$log_file" "Successfully encrypted: $src -> $dest"
-                return 0
+            if $ENCRYPT_FILES; then
+                # Show progress while encrypting
+                if pv -N "Encrypting $(basename "$src")" "$src" | \
+                    gpg --batch --yes --encrypt --sign --recipient "$GPG_RECIPIENT" --output "$dest" 2>> "$log_file"; then
+                    log_to_file "$log_file" "Successfully encrypted: $src -> $dest"
+                    return 0
+                else
+                    log_to_file "$log_file" "ERROR: Failed to encrypt: $src"
+                    return 1
+                fi
             else
-                log_to_file "$log_file" "ERROR: Failed to encrypt: $src"
-                return 1
+                # Just copy the file without encryption
+                if pv -N "Copying $(basename "$src")" "$src" > "$dest" 2>> "$log_file"; then
+                    log_to_file "$log_file" "Successfully copied: $src -> $dest"
+                    return 0
+                else
+                    log_to_file "$log_file" "ERROR: Failed to copy: $src"
+                    return 1
+                fi
             fi
         }
 
@@ -337,14 +349,20 @@ case "$1" in
             
             find "$dir" -type f | while read -r file; do
                 local rel_path="${file#$dir/}"
-                local dest_file="$BACKUP_FOLDER/$base_name/${rel_path}.gpg"
+                local dest_file
+                
+                if $ENCRYPT_FILES; then
+                    dest_file="$BACKUP_FOLDER/$base_name/${rel_path}.gpg"
+                else
+                    dest_file="$BACKUP_FOLDER/$base_name/${rel_path}"
+                fi
                 
                 log_to_file "$log_file" "Processing: $file"
                 encrypt_file "$file" "$dest_file" "$log_file"
                 
                 if [ $? -ne 0 ]; then
-                    log "ERROR: Failed to encrypt $file"
-                    log_to_file "$log_file" "ERROR: Failed to encrypt $file"
+                    log "ERROR: Failed to process $file"
+                    log_to_file "$log_file" "ERROR: Failed to process $file"
                     failed=1
                 fi
             done
@@ -398,13 +416,28 @@ case "$1" in
                             fi
                             
                             local chunk_name=$(basename "$chunk")
-                            local encrypted_path="$BACKUP_FOLDER/${base_name}/${chunk_name}.gpg"
+                            local encrypted_path
+                            
+                            if $ENCRYPT_FILES; then
+                                encrypted_path="$BACKUP_FOLDER/${base_name}/${chunk_name}.gpg"
+                            else
+                                encrypted_path="$BACKUP_FOLDER/${base_name}/${chunk_name}"
+                            fi
                             
                             mkdir -p "$(dirname "$encrypted_path")"
                             
-                            log "Encrypting chunk: $chunk_name ($(stat -c%s "$chunk") bytes)"
+                            if $ENCRYPT_FILES; then
+                                log "Encrypting chunk: $chunk_name ($(stat -c%s "$chunk") bytes)"
+                            else
+                                log "Copying chunk: $chunk_name ($(stat -c%s "$chunk") bytes)"
+                            fi
+                            
                             if ! encrypt_file "$chunk" "$encrypted_path" "$log_file"; then
-                                log "ERROR: Failed to encrypt chunk: $chunk"
+                                if $ENCRYPT_FILES; then
+                                    log "ERROR: Failed to encrypt chunk: $chunk"
+                                else
+                                    log "ERROR: Failed to copy chunk: $chunk"
+                                fi
                                 chunk_failed=1
                                 break
                             fi
@@ -418,9 +451,19 @@ case "$1" in
                             rm -rf "$BACKUP_FOLDER/${base_name}"
                         fi
                     else
-                        local encrypted_path="$BACKUP_FOLDER/${base_name}.zip.gpg"
-                        if ! encrypt_file "$archive_path" "$encrypted_path" "$log_file"; then
-                            log "ERROR: Failed to encrypt archive for $dir"
+                        local destination_path
+                        if $ENCRYPT_FILES; then
+                            destination_path="$BACKUP_FOLDER/${base_name}.zip.gpg"
+                        else
+                            destination_path="$BACKUP_FOLDER/${base_name}.zip"
+                        fi
+                        
+                        if ! encrypt_file "$archive_path" "$destination_path" "$log_file"; then
+                            if $ENCRYPT_FILES; then
+                                log "ERROR: Failed to encrypt archive for $dir"
+                            else
+                                log "ERROR: Failed to copy archive for $dir"
+                            fi
                             failed=1
                         fi
                     fi
@@ -534,14 +577,25 @@ case "$1" in
                 
                 local base_name=$(basename "$file")
                 local dir_name=$(dirname "$file" | sed 's/^\///')
-                local dest_file="$BACKUP_FOLDER/files/$dir_name/${base_name}.gpg"
+                local dest_file
+                
+                if $ENCRYPT_FILES; then
+                    dest_file="$BACKUP_FOLDER/files/$dir_name/${base_name}.gpg"
+                else
+                    dest_file="$BACKUP_FOLDER/files/$dir_name/${base_name}"
+                fi
                 
                 log_to_file "$log_file" "Processing system file: $file"
                 encrypt_file "$file" "$dest_file" "$log_file"
                 
                 if [ $? -ne 0 ]; then
-                    log "ERROR: Failed to encrypt system file: $file"
-                    log_to_file "$log_file" "ERROR: Failed to encrypt system file: $file"
+                    if $ENCRYPT_FILES; then
+                        log "ERROR: Failed to encrypt system file: $file"
+                        log_to_file "$log_file" "ERROR: Failed to encrypt system file: $file"
+                    else
+                        log "ERROR: Failed to copy system file: $file"
+                        log_to_file "$log_file" "ERROR: Failed to copy system file: $file"
+                    fi
                     failed=1
                 else
                     log_to_file "$log_file" "Successfully processed system file: $file"
@@ -587,6 +641,11 @@ case "$1" in
         }
 
         log "Starting backup process..."
+        if $ENCRYPT_FILES; then
+            log "Encryption is enabled - files will be encrypted with GPG"
+        else
+            log "Encryption is disabled - files will be backed up without encryption"
+        fi
 
         TOTAL_SIZE=$(calculate_total_size)
         log "Total estimated backup size: $(numfmt --to=iec-i --suffix=B $TOTAL_SIZE)"

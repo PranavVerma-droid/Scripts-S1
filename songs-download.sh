@@ -26,6 +26,7 @@ PLAYLISTS=(
     "https://music.youtube.com/playlist?list=OLAK5uy_ksMcoC36wmr-fyFQfcpM_TjVqo3pBA1H4"
     "https://music.youtube.com/playlist?list=OLAK5uy_kmOkMBRTqsEVhlWDGC27PjX8fMpt5BO18"
     "https://music.youtube.com/playlist?list=OLAK5uy_n2YwQKcKTO6otw0P58WN5s9boW87J_avE"
+    "https://music.youtube.com/playlist?list=PLByuInhy-5qHvtnAXU23MJGkK1O4-fQXv"
 )
 
 # Specify the path to the downloader binary (update with your binary location)
