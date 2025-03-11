@@ -122,38 +122,107 @@ decrypt_backup() {
     echo "Decryption process completed!"
 }
 
+verify_backup_paths() {
+    log "Verifying backup paths..."
+    
+    if [ "$BACKUP_TYPE" = "NAS" ]; then
+        if [ ! -d "$NAS_MOUNT_POINT" ]; then
+            if ! mkdir -p "$NAS_MOUNT_POINT"; then
+                log "ERROR: Cannot create NAS mount point: $NAS_MOUNT_POINT"
+                return 1
+            fi
+        fi
+    else
+        if [ ! -d "$LOCAL_BACKUP_PATH" ]; then
+            if ! mkdir -p "$LOCAL_BACKUP_PATH"; then
+                log "ERROR: Cannot create local backup path: $LOCAL_BACKUP_PATH"
+                return 1
+            fi
+        fi
+        export BACKUP_FOLDER="$LOCAL_BACKUP_PATH/$BACKUP_TIMESTAMP"
+    fi
+    
+    log "Creating backup folder: $BACKUP_FOLDER"
+    if ! mkdir -p "$BACKUP_FOLDER"; then
+        log "ERROR: Cannot create backup folder: $BACKUP_FOLDER"
+        return 1
+    fi
+    
+    if [ ! -w "$BACKUP_FOLDER" ]; then
+        log "ERROR: Backup folder is not writable: $BACKUP_FOLDER"
+        return 1
+    fi
+    
+    log "Backup paths verified successfully"
+    return 0
+}
+
 case "$1" in
     --backup)
         if [ ! -f "$SCRIPT_DIR/.credentials" ]; then
             echo -e "\e[31mERROR: Credentials file not found at $SCRIPT_DIR/.credentials\e[0m"
             echo -e "\e[1mPlease Create one and add the following details:\e[0m"
             echo ""
+            echo -e "\e[32m#######################"
+            echo -e "# Backup Type Settings"
+            echo -e "#######################\e[0m"
+            echo -e "\e[33mexport BACKUP_TYPE=\"\e[34mNAS\e[33m\"  # Can be either \"NAS\" or \"LOCAL\"\e[0m"
+            echo ""
+            echo -e "\e[32m#######################"
+            echo -e "# NAS Backup Settings"
+            echo -e "#######################\e[0m"
             echo -e "\e[33mNAS_IP=\"\e[34mYOUR-NAS-IP\e[33m\""
             echo -e "NAS_USER=\"\e[34mYOUR-NAS-USER\e[33m\""
-            echo -e "NAS_PASSWORD=\"\e[34mYOUR-NAS-USER-PASSWORD\e[33m\""
+            echo -e "NAS_PASSWORD=\"\e[34mYOUR-NAS-PASSWORD\e[33m\""
+            echo -e "export NAS_MOUNT_POINT=\"\e[34m/mnt/nas\e[33m\""
+            echo -e "export NAS_REMOTE_PATH=\"//\${NAS_IP}/home/Server Backup (db1)\""
+            echo -e "export BACKUP_FOLDER=\"\$NAS_MOUNT_POINT/\$BACKUP_TIMESTAMP\"  # Only for NAS backups\e[0m"
             echo ""
+            echo -e "\e[32m#######################"
+            echo -e "# Local Backup Settings"
+            echo -e "#######################\e[0m"
+            echo -e "\e[33mexport LOCAL_BACKUP_PATH=\"\e[34m/path/to/local/backup\e[33m\"  # Base path for local backups\e[0m"
+            echo ""
+            echo -e "\e[32m#######################"
+            echo -e "# Common Backup Settings"
+            echo -e "#######################\e[0m"
+            echo -e "\e[33mexport BACKUP_TIMESTAMP=\"server_backup_\$(date +%Y-%m-%d_%H-%M-%S)\""
+            echo -e "export BACKUP_FOLDER=\"\$NAS_MOUNT_POINT/\$BACKUP_TIMESTAMP\""
             echo -e "export ENCRYPT_FILES=\e[34mtrue\e[33m"
-            echo "export CHUNK_SIZE=8589934592"
-            echo "export BACKUP_TIMESTAMP=\"server_backup_\$(date +%Y-%m-%d_%H-%M-%S)\""
-            echo $'export NAS_MOUNT_POINT="\e[34m/mnt/nas\e[33m"'
-            echo "export NAS_REMOTE_PATH=\"//\${NAS_IP}/home/Server Backup (db1)\""
-            echo "export BACKUP_FOLDER=\"\$NAS_MOUNT_POINT/\$BACKUP_TIMESTAMP\""
             echo -e "export GPG_RECIPIENT=\"\e[34mYOUR-GPG-KEY-EMAIL@gmail.com\e[33m\""
-            echo "export MAX_PARALLEL_JOBS=4"
-            echo "export MAX_BACKUPS=3"
-            echo "export TEMP_DIR=\"/tmp/\$BACKUP_TIMESTAMP\""
-            echo "export MAIN_LOG=\"\$TEMP_DIR/logs/backup_main.log\""
-            echo "export MUTEX_FILE=\"/tmp/backup_mutex_$$\""
+            echo -e "export CHUNK_SIZE=8589934592  # 8GB in bytes"
+            echo -e "export MAX_PARALLEL_JOBS=4"
+            echo -e "export MAX_BACKUPS=3\e[0m"
             echo ""
-            echo -e "\e[33mdeclare -a BACKUP_DIRS_WITHOUT_ARCHIVE=()"
-            echo -e "declare -a BACKUP_DIRS=(\n    \"\e[34m/path/to/folder1\e[33m\"\n    \"\e[34m/path/to/folder2\e[33m\"\n)\e[0m"
+            echo -e "#######################"
+            echo -e "# Temporary Files"
+            echo -e "#######################"
+            echo -e "\e[33mexport TEMP_DIR=\"/tmp/\$BACKUP_TIMESTAMP\""
+            echo -e "export MAIN_LOG=\"\$TEMP_DIR/logs/backup_main.log\""
+            echo -e "export MUTEX_FILE=\"/tmp/backup_mutex_$$\"\e[0m"
             echo ""
-            echo -e "\e[33mdeclare -a BACKUP_FILES=(\n    \"\e[34m/etc/fstab\e[33m\"\n    \"\e[34m/etc/crontab\e[33m\"\n    \"\e[34m/etc/hosts\e[33m\"\n)\e[0m"
+            echo -e "\e[32m#######################"
+            echo -e "# Backup Source Paths"
+            echo -e "#######################\e[0m"
+            echo -e "\e[33mdeclare -a BACKUP_DIRS_WITHOUT_ARCHIVE=(\n    \"\e[34m/path/to/folder1\e[33m\"\n)\n"
+            echo -e "declare -a BACKUP_DIRS=(\n    \"\e[34m/path/to/folder2\e[33m\"\n    \"\e[34m/path/to/folder3\e[33m\"\n)\n"
+            echo -e "declare -a BACKUP_FILES=(\n    \"\e[34m/etc/fstab\e[33m\"\n    \"\e[34m/etc/crontab\e[33m\"\n    \"\e[34m/etc/hosts\e[33m\"\n)\e[0m"
             echo ""
             exit 1
         fi
 
         source "$SCRIPT_DIR/.credentials"
+
+        # Validate backup type
+        if [ "$BACKUP_TYPE" != "NAS" ] && [ "$BACKUP_TYPE" != "LOCAL" ]; then
+            log "ERROR: BACKUP_TYPE must be either 'NAS' or 'LOCAL'"
+            exit 1
+        fi
+
+        if [ "$BACKUP_TYPE" = "LOCAL" ] && [ -z "$LOCAL_BACKUP_PATH" ]; then
+            log "ERROR: LOCAL_BACKUP_PATH must be set when BACKUP_TYPE is LOCAL"
+            exit 1
+        fi
 
         if [ -f "$MUTEX_FILE" ]; then
             echo "ERROR: Another backup process appears to be running"
@@ -252,31 +321,6 @@ case "$1" in
                 return 1
             fi
             
-            return 0
-        }
-
-        verify_backup_paths() {
-            log "Verifying backup paths..."
-            
-            if [ ! -d "$NAS_MOUNT_POINT" ]; then
-                if ! mkdir -p "$NAS_MOUNT_POINT"; then
-                    log "ERROR: Cannot create NAS mount point: $NAS_MOUNT_POINT"
-                    return 1
-                fi
-            fi
-            
-            log "Creating backup folder: $BACKUP_FOLDER"
-            if ! mkdir -p "$BACKUP_FOLDER"; then
-                log "ERROR: Cannot create backup folder: $BACKUP_FOLDER"
-                return 1
-            fi
-            
-            if [ ! -w "$BACKUP_FOLDER" ]; then
-                log "ERROR: Backup folder is not writable: $BACKUP_FOLDER"
-                return 1
-            fi
-            
-            log "Backup paths verified successfully"
             return 0
         }
 
@@ -655,9 +699,11 @@ case "$1" in
 
         case "$CHECKPOINT" in
             "start"|"")
-                if ! mount_nas; then
-                    log "ERROR: Failed to ensure NAS is mounted and writable"
-                    exit 1
+                if [ "$BACKUP_TYPE" = "NAS" ]; then
+                    if ! mount_nas; then
+                        log "ERROR: Failed to ensure NAS is mounted and writable"
+                        exit 1
+                    fi
                 fi
                 save_checkpoint "mounted"
                 ;&
