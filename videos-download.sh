@@ -176,12 +176,53 @@ get_channel_name() {
     fi
 }
 
+# Function to extract YouTube video ID from URL
+get_video_id() {
+    local URL="$1"
+    local VIDEO_ID=""
+    
+    if [[ "$URL" == *"youtu.be/"* ]]; then
+        # Short URLs like https://youtu.be/VIDEO_ID
+        VIDEO_ID=$(echo "$URL" | sed -E 's|.*youtu\.be/([^?&]+).*|\1|')
+    elif [[ "$URL" == *"youtube.com/watch"* ]]; then
+        # Standard URLs like https://www.youtube.com/watch?v=VIDEO_ID
+        VIDEO_ID=$(echo "$URL" | sed -E 's|.*[?&]v=([^&]+).*|\1|')
+    fi
+    
+    echo "$VIDEO_ID"
+}
+
 # Function to check if a video already exists in the creator's folder
 video_exists() {
     local VIDEO_URL="$1"
     local CREATOR_FOLDER="$2"
+    local VIDEO_ID=$(get_video_id "$VIDEO_URL")
     local VIDEO_TITLE=""
     
+    # First, try to match by video ID (most reliable method)
+    if [[ -n "$VIDEO_ID" ]]; then
+        # Check if we've saved the video ID in our record file
+        local RECORD_FILE="$CREATOR_FOLDER/.downloaded_videos.txt"
+        if [[ -f "$RECORD_FILE" && $(grep -c "$VIDEO_ID" "$RECORD_FILE") -gt 0 ]]; then
+            echo "Found video ID match in record file: $VIDEO_ID"
+            return 0 # Video exists
+        fi
+        
+        # Also check for video ID in filenames (some might have it)
+        if [[ -d "$CREATOR_FOLDER" ]]; then
+            for existing_file in "$CREATOR_FOLDER"/*.mp4; do
+                if [[ -f "$existing_file" && "$existing_file" == *"$VIDEO_ID"* ]]; then
+                    echo "Found video ID in filename: $existing_file"
+                    # Add to our record for future checks
+                    mkdir -p "$CREATOR_FOLDER"
+                    echo "$VIDEO_ID" >> "$RECORD_FILE"
+                    return 0 # Video exists
+                fi
+            done
+        fi
+    fi
+    
+    # If no match by ID, fall back to title matching
     # Get video title
     if $USE_COOKIES; then
         VIDEO_TITLE=$(timeout 30s "$DOWNLOADER_PATH" --cookies "$COOKIES_FILE" --print "%(title)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
@@ -191,11 +232,13 @@ video_exists() {
     
     if [[ -z "$VIDEO_TITLE" ]]; then
         # Couldn't get title, so can't check if exists
-        return 1
+        echo "Could not retrieve video title for $VIDEO_URL"
+        return 1 # Assume it doesn't exist
     fi
     
     # Normalize the title for matching
     VIDEO_TITLE=$(echo "$VIDEO_TITLE" | tr -d '[:punct:]' | tr '[:upper:]' '[:lower:]' | tr -s ' ')
+    echo "Checking for existing video with title: $VIDEO_TITLE"
     
     # Check if any file in the folder matches the title
     local found=0
@@ -205,10 +248,41 @@ video_exists() {
                 local base_name=$(basename "$existing_file" .mp4)
                 local normalized_name=$(echo "$base_name" | tr -d '[:punct:]' | tr '[:upper:]' '[:lower:]' | tr -s ' ')
                 
-                # Check for similarity (allowing for small differences in title)
-                if [[ "$normalized_name" == *"$VIDEO_TITLE"* || "$VIDEO_TITLE" == *"$normalized_name"* ]]; then
+                # Calculate similarity between titles
+                local similarity=0
+                local match_threshold=70 # percentage
+                
+                # Simple but effective similarity check - count common words
+                local title_words=($VIDEO_TITLE)
+                local name_words=($normalized_name)
+                local common_words=0
+                local total_words=${#title_words[@]}
+                
+                for word in "${title_words[@]}"; do
+                    # Skip very short words (a, an, the, etc.)
+                    if [[ ${#word} -lt 3 ]]; then continue; fi
+                    
+                    # Check if this word appears in the existing filename
+                    if [[ "$normalized_name" == *"$word"* ]]; then
+                        ((common_words++))
+                    fi
+                done
+                
+                # Calculate similarity percentage if we have words to compare
+                if [[ $total_words -gt 0 ]]; then
+                    similarity=$((common_words * 100 / total_words))
+                fi
+                
+                # If high similarity or one title contains the other completely
+                if [[ $similarity -ge $match_threshold || "$normalized_name" == *"$VIDEO_TITLE"* || "$VIDEO_TITLE" == *"$normalized_name"* ]]; then
                     found=1
-                    echo "Found existing video: $existing_file"
+                    echo "Found existing video by title match: $existing_file (Similarity: $similarity%)"
+                    
+                    # Save the video ID in our record file for future lookups
+                    if [[ -n "$VIDEO_ID" ]]; then
+                        mkdir -p "$CREATOR_FOLDER"
+                        echo "$VIDEO_ID" >> "$RECORD_FILE"
+                    fi
                     break
                 fi
             fi
@@ -216,6 +290,20 @@ video_exists() {
     fi
     
     return $((1 - found))
+}
+
+# Function to record downloaded video
+record_downloaded_video() {
+    local VIDEO_URL="$1"
+    local CREATOR_FOLDER="$2"
+    local VIDEO_ID=$(get_video_id "$VIDEO_URL")
+    
+    if [[ -n "$VIDEO_ID" ]]; then
+        local RECORD_FILE="$CREATOR_FOLDER/.downloaded_videos.txt"
+        mkdir -p "$CREATOR_FOLDER"
+        echo "$VIDEO_ID" >> "$RECORD_FILE"
+        echo "Recorded downloaded video ID: $VIDEO_ID"
+    fi
 }
 
 # Function to download a single video and save it in creator's folder
@@ -263,9 +351,10 @@ download_video() {
     
     # Try first with more compatible formats, avoiding AV1
     "$DOWNLOADER_PATH" "${DOWNLOAD_OPTS[@]}" "$VIDEO_URL"
+    local download_status=$?
         
     # If the above fails, try with more compatible format
-    if [ $? -ne 0 ]; then
+    if [ $download_status -ne 0 ]; then
         echo "First attempt failed. Trying with more compatible format..."
         
         # Reset options for second attempt
@@ -287,9 +376,10 @@ download_video() {
         fi
         
         "$DOWNLOADER_PATH" "${DOWNLOAD_OPTS[@]}" "$VIDEO_URL"
+        download_status=$?
             
         # If that also fails, try with simpler format
-        if [ $? -ne 0 ]; then
+        if [ $download_status -ne 0 ]; then
             echo "Second attempt failed. Trying with simple format..."
             
             # Reset options for third attempt
@@ -309,7 +399,13 @@ download_video() {
             fi
             
             "$DOWNLOADER_PATH" "${DOWNLOAD_OPTS[@]}" "$VIDEO_URL"
+            download_status=$?
         fi
+    fi
+    
+    # Record the video as downloaded if any download attempt succeeded
+    if [ $download_status -eq 0 ]; then
+        record_downloaded_video "$VIDEO_URL" "$CREATOR_FOLDER"
     fi
     
     # Clean up any leftover thumbnail files
