@@ -1,5 +1,22 @@
 #!/bin/bash
 
+# Check if script is running inside tmux or being called directly
+if [ -z "$TMUX" ] && [ "$1" != "--inside-tmux" ]; then
+    echo "Starting download script in a tmux session..."
+    
+    # Check if tmux is installed
+    if ! command -v tmux &> /dev/null; then
+        echo "tmux is not installed. Please install it with: apt-get install tmux"
+        exit 1
+    fi
+    
+    # Create a new tmux session named "song-download" and start script
+    tmux new-session -d -s songs-download "$0 --inside-tmux"
+    echo "Download process started in tmux session. To view progress, run:"
+    echo "tmux attach -t songs-download"
+    exit 0
+fi
+
 # Define the base folder to save downloads
 BASE_FOLDER="/songs/All Songs"
 

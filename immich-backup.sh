@@ -1,5 +1,20 @@
 #!/bin/bash
 
+if [ -z "$TMUX" ] && [ "$1" != "--inside-tmux" ]; then
+    echo "Starting backup script in a tmux session..."
+    
+    # Check if tmux is installed
+    if ! command -v tmux &> /dev/null; then
+        echo "tmux is not installed. Please install it with: apt-get install tmux"
+        exit 1
+    fi
+    
+    tmux new-session -d -s immich-backup "$0 --inside-tmux"
+    echo "Backup process started in tmux session. To view progress, run:"
+    echo "tmux attach -t immich-backup"
+    exit 0
+fi
+
 # Variables
 BACKUP_DIR="/backups/Immich Panel"
 LOG_DIR="$BACKUP_DIR/logs"

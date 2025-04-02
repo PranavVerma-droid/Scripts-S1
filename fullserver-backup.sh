@@ -159,6 +159,21 @@ verify_backup_paths() {
 
 case "$1" in
     --backup)
+        if [ -z "$TMUX" ] && [ "$2" != "--inside-tmux" ]; then
+            echo "Starting backup script in a tmux session..."
+            
+            # Check if tmux is installed
+            if ! command -v tmux &> /dev/null; then
+                echo "tmux is not installed. Please install it with: apt-get install tmux"
+                exit 1
+            fi
+            
+            tmux new-session -d -s fullserver-backup "$0 --backup --inside-tmux"
+            echo "Backup process started in tmux session. To view progress, run:"
+            echo "tmux attach -t server-backup"
+            exit 0
+        fi
+
         if [ ! -f "$SCRIPT_DIR/.credentials" ]; then
             echo -e "\e[31mERROR: Credentials file not found at $SCRIPT_DIR/.credentials\e[0m"
             echo -e "\e[1mPlease Create one and add the following details:\e[0m"
