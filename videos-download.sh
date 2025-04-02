@@ -20,6 +20,20 @@ fi
 # Define the base folder to save video downloads
 BASE_FOLDER="/videos/All Videos"
 
+# Path to cookies file (update this path to the location of your exported cookies file)
+COOKIES_FILE="/scripts/cookies.txt"
+
+# Check if cookies file exists and set a flag
+USE_COOKIES=false
+if [ -f "$COOKIES_FILE" ]; then
+    USE_COOKIES=true
+    echo "Found cookies file. Will use authentication for age-restricted videos."
+else
+    echo "No cookies file found at $COOKIES_FILE. Age-restricted videos might fail to download."
+    echo "To download age-restricted videos, export cookies from your browser using the 'Get cookies.txt' extension."
+    echo "When using the extension, select 'Current Site' option while on youtube.com"
+fi
+
 # Predefined list of video channel/playlist URLs
 VIDEO_SOURCES=(
     https://www.youtube.com/playlist?list=PLAhTBeRe8IhMmRve_rSfAgL_dtEXkKh8Z
@@ -54,6 +68,12 @@ if ! command -v "$DOWNLOADER_PATH" &> /dev/null; then
     exit 1
 fi
 
+# Check if cookies file exists
+if [ ! -f "$COOKIES_FILE" ]; then
+    echo "Cookies file not found at $COOKIES_FILE. Please export cookies from your browser and update the path."
+    exit 1
+fi
+
 # Display information about AV1 codecs
 echo "---------------------------------------------------------------------"
 echo "INFO: If you encounter AV1 codec issues when playing videos, install:"
@@ -83,11 +103,19 @@ get_channel_name() {
     
     # Try multiple methods to get the channel name
     # Method 1: Direct channel access with increased timeout
-    CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --print "%(channel)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+    if $USE_COOKIES; then
+        CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --cookies "$COOKIES_FILE" --print "%(channel)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+    else
+        CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --print "%(channel)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+    fi
     
     # Method 2: Try with uploader instead of channel
     if [[ -z "$CHANNEL_NAME" ]]; then
-        CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --print "%(uploader)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+        if $USE_COOKIES; then
+            CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --cookies "$COOKIES_FILE" --print "%(uploader)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+        else
+            CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --print "%(uploader)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+        fi
     fi
     
     # Method 3: For YouTube URLs, try to extract ID and use it directly
@@ -103,10 +131,18 @@ get_channel_name() {
         if [[ -n "$VIDEO_ID" ]]; then
             # Try clean URL with just video ID
             CLEAN_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
-            CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --print "%(channel)s" "$CLEAN_URL" 2>/dev/null | head -n 1)
-            
-            if [[ -z "$CHANNEL_NAME" ]]; then
-                CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --print "%(uploader)s" "$CLEAN_URL" 2>/dev/null | head -n 1)
+            if $USE_COOKIES; then
+                CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --cookies "$COOKIES_FILE" --print "%(channel)s" "$CLEAN_URL" 2>/dev/null | head -n 1)
+                
+                if [[ -z "$CHANNEL_NAME" ]]; then
+                    CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --cookies "$COOKIES_FILE" --print "%(uploader)s" "$CLEAN_URL" 2>/dev/null | head -n 1)
+                fi
+            else
+                CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --print "%(channel)s" "$CLEAN_URL" 2>/dev/null | head -n 1)
+                
+                if [[ -z "$CHANNEL_NAME" ]]; then
+                    CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --print "%(uploader)s" "$CLEAN_URL" 2>/dev/null | head -n 1)
+                fi
             fi
         fi
     fi
@@ -114,7 +150,13 @@ get_channel_name() {
     # Provide a descriptive fallback if all methods fail
     if [[ -z "$CHANNEL_NAME" ]]; then
         # Try to get video title for more descriptive fallback
-        local VIDEO_TITLE=$(timeout 30s "$DOWNLOADER_PATH" --print "%(title)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+        local VIDEO_TITLE
+        if $USE_COOKIES; then
+            VIDEO_TITLE=$(timeout 30s "$DOWNLOADER_PATH" --cookies "$COOKIES_FILE" --print "%(title)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+        else
+            VIDEO_TITLE=$(timeout 30s "$DOWNLOADER_PATH" --print "%(title)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+        fi
+        
         if [[ -n "$VIDEO_TITLE" ]]; then
             echo "Single_Video_${VIDEO_TITLE:0:20}"
         else
@@ -141,47 +183,76 @@ download_video() {
     
     echo "Downloading to creator folder: $CREATOR_NAME"
     
+    # Set up base command
+    local DOWNLOAD_OPTS=(
+        "-o" "$CREATOR_FOLDER/%(title)s.%(ext)s"
+        "--format" "bestvideo[height<=1080][vcodec!*=av01][vcodec!*=vp9]+bestaudio/best[height<=1080][vcodec!*=av01]"
+        "--merge-output-format" "mp4"
+        "--prefer-ffmpeg"
+        "--embed-thumbnail"
+        "--embed-metadata"
+        "--add-metadata"
+        "--convert-thumbnails" "jpg"
+        "--remux-video" "mp4"
+        "--no-keep-video"
+        "--no-mtime"
+        "--continue"
+        "--ignore-errors"
+    )
+    
+    # Add cookies if available
+    if $USE_COOKIES; then
+        DOWNLOAD_OPTS+=("--cookies" "$COOKIES_FILE")
+    fi
+    
     # Try first with more compatible formats, avoiding AV1
-    "$DOWNLOADER_PATH" -o "$CREATOR_FOLDER/%(title)s.%(ext)s" \
-        --format "bestvideo[height<=1080][vcodec!*=av01][vcodec!*=vp9]+bestaudio/best[height<=1080][vcodec!*=av01]" \
-        --merge-output-format mp4 \
-        --prefer-ffmpeg \
-        --embed-thumbnail \
-        --embed-metadata \
-        --add-metadata \
-        --convert-thumbnails jpg \
-        --remux-video mp4 \
-        --no-keep-video \
-        --no-mtime \
-        --continue \
-        --ignore-errors \
-        "$VIDEO_URL"
+    "$DOWNLOADER_PATH" "${DOWNLOAD_OPTS[@]}" "$VIDEO_URL"
         
     # If the above fails, try with more compatible format
     if [ $? -ne 0 ]; then
         echo "First attempt failed. Trying with more compatible format..."
-        "$DOWNLOADER_PATH" -o "$CREATOR_FOLDER/%(title)s.%(ext)s" \
-            --format "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
-            --merge-output-format mp4 \
-            --prefer-ffmpeg \
-            --embed-thumbnail \
-            --embed-metadata \
-            --add-metadata \
-            --continue \
-            --ignore-errors \
-            "$VIDEO_URL"
+        
+        # Reset options for second attempt
+        DOWNLOAD_OPTS=(
+            "-o" "$CREATOR_FOLDER/%(title)s.%(ext)s"
+            "--format" "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            "--merge-output-format" "mp4"
+            "--prefer-ffmpeg"
+            "--embed-thumbnail"
+            "--embed-metadata"
+            "--add-metadata"
+            "--continue"
+            "--ignore-errors"
+        )
+        
+        # Add cookies if available
+        if $USE_COOKIES; then
+            DOWNLOAD_OPTS+=("--cookies" "$COOKIES_FILE")
+        fi
+        
+        "$DOWNLOADER_PATH" "${DOWNLOAD_OPTS[@]}" "$VIDEO_URL"
             
         # If that also fails, try with simpler format
         if [ $? -ne 0 ]; then
             echo "Second attempt failed. Trying with simple format..."
-            "$DOWNLOADER_PATH" -o "$CREATOR_FOLDER/%(title)s.%(ext)s" \
-                --format "18/22/best" \
-                --prefer-ffmpeg \
-                --embed-thumbnail \
-                --embed-metadata \
-                --continue \
-                --ignore-errors \
-                "$VIDEO_URL"
+            
+            # Reset options for third attempt
+            DOWNLOAD_OPTS=(
+                "-o" "$CREATOR_FOLDER/%(title)s.%(ext)s"
+                "--format" "18/22/best"
+                "--prefer-ffmpeg"
+                "--embed-thumbnail"
+                "--embed-metadata"
+                "--continue"
+                "--ignore-errors"
+            )
+            
+            # Add cookies if available
+            if $USE_COOKIES; then
+                DOWNLOAD_OPTS+=("--cookies" "$COOKIES_FILE")
+            fi
+            
+            "$DOWNLOADER_PATH" "${DOWNLOAD_OPTS[@]}" "$VIDEO_URL"
         fi
     fi
     
@@ -200,7 +271,19 @@ for URL in "${VIDEO_SOURCES[@]}"; do
         
         # First extract all video IDs from the playlist
         echo "Extracting videos from playlist..."
-        VIDEO_IDS=$(timeout 60s "$DOWNLOADER_PATH" --flat-playlist --print "%(id)s" "$URL" 2>/dev/null)
+        
+        # Set up extract command
+        EXTRACT_OPTS=(
+            "--flat-playlist"
+            "--print" "%(id)s"
+        )
+        
+        # Add cookies if available
+        if $USE_COOKIES; then
+            EXTRACT_OPTS+=("--cookies" "$COOKIES_FILE")
+        fi
+        
+        VIDEO_IDS=$(timeout 60s "$DOWNLOADER_PATH" "${EXTRACT_OPTS[@]}" "$URL" 2>/dev/null)
         
         # Check if we got any video IDs
         if [[ -z "$VIDEO_IDS" ]]; then
