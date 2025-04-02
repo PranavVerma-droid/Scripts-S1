@@ -56,7 +56,15 @@ VIDEO_SOURCES=(
     https://youtu.be/qJZ1Ez28C-A?si=yqXaoDtWbTXyOjNU
     https://youtu.be/OxGsU8oIWjY?si=4R_MihYjIKYhX46L
     https://www.youtube.com/playlist?list=PLkahZjV5wKe8w9GC_n2yyhx6Wj-NKzzeE
-    # Add your video channels/playlists here
+    https://www.youtube.com/playlist?list=PL5SfwcMShbfUzLbyNgX4hsj4ZHaMl4kMr
+    https://youtu.be/J1-wBqgJAnA?si=cDTqWO38LTuTr-7o
+    https://youtu.be/K381EkDpUKw?si=tgOJ5BmnV36aG8zS
+    https://youtu.be/fZJNsDagK2g?si=YkMGtUDK9KLQ5vYg
+    https://youtu.be/Qe5WT22-AO8?si=qzad1PooiPGMqj9R
+    https://www.youtube.com/playlist?list=PLFs4vir_WsTysVwsTy7hVL89W2MdQtU_k
+    https://youtu.be/isdLel273rQ?si=mpvm7Whtkn526wEy
+    https://youtu.be/isdLel273rQ?si=mpvm7Whtkn526wEy
+    https://youtu.be/1fQkVqno-uI?si=K_CLjCDAHZY-c2Cq
 )
 
 # Specify the path to the downloader binary (update with your binary location)
@@ -168,6 +176,48 @@ get_channel_name() {
     fi
 }
 
+# Function to check if a video already exists in the creator's folder
+video_exists() {
+    local VIDEO_URL="$1"
+    local CREATOR_FOLDER="$2"
+    local VIDEO_TITLE=""
+    
+    # Get video title
+    if $USE_COOKIES; then
+        VIDEO_TITLE=$(timeout 30s "$DOWNLOADER_PATH" --cookies "$COOKIES_FILE" --print "%(title)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+    else
+        VIDEO_TITLE=$(timeout 30s "$DOWNLOADER_PATH" --print "%(title)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+    fi
+    
+    if [[ -z "$VIDEO_TITLE" ]]; then
+        # Couldn't get title, so can't check if exists
+        return 1
+    fi
+    
+    # Normalize the title for matching
+    VIDEO_TITLE=$(echo "$VIDEO_TITLE" | tr -d '[:punct:]' | tr '[:upper:]' '[:lower:]' | tr -s ' ')
+    
+    # Check if any file in the folder matches the title
+    local found=0
+    if [[ -d "$CREATOR_FOLDER" ]]; then
+        for existing_file in "$CREATOR_FOLDER"/*.mp4; do
+            if [[ -f "$existing_file" ]]; then
+                local base_name=$(basename "$existing_file" .mp4)
+                local normalized_name=$(echo "$base_name" | tr -d '[:punct:]' | tr '[:upper:]' '[:lower:]' | tr -s ' ')
+                
+                # Check for similarity (allowing for small differences in title)
+                if [[ "$normalized_name" == *"$VIDEO_TITLE"* || "$VIDEO_TITLE" == *"$normalized_name"* ]]; then
+                    found=1
+                    echo "Found existing video: $existing_file"
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    return $((1 - found))
+}
+
 # Function to download a single video and save it in creator's folder
 download_video() {
     local VIDEO_URL="$1"
@@ -180,6 +230,12 @@ download_video() {
     # Create folder structure
     CREATOR_FOLDER="$BASE_FOLDER/$CREATOR_NAME"
     mkdir -p "$CREATOR_FOLDER"
+    
+    # Check if video already exists
+    if video_exists "$VIDEO_URL" "$CREATOR_FOLDER"; then
+        echo "Video already exists in $CREATOR_FOLDER, skipping download."
+        return 0
+    fi
     
     echo "Downloading to creator folder: $CREATOR_NAME"
     
