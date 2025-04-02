@@ -247,3 +247,9 @@ for URL in "${VIDEO_SOURCES[@]}"; do
 done
 
 echo "All video downloads completed. Videos saved to $BASE_FOLDER."
+
+if [ -n "$TMUX" ] && [ "$1" == "--inside-tmux" ]; then
+    echo "Downloads complete. Automatically terminating tmux session in 3 seconds..."
+    sleep 3
+    tmux kill-session -t videos-download
+fi

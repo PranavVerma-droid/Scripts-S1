@@ -146,3 +146,9 @@ for URL in "${PLAYLISTS[@]}"; do
 done
 
 echo "All downloads completed. Playlists saved to $BASE_FOLDER."
+
+if [ -n "$TMUX" ] && [ "$1" == "--inside-tmux" ]; then
+    echo "Downloads complete. Automatically terminating tmux session in 3 seconds..."
+    sleep 3
+    tmux kill-session -t songs-download
+fi

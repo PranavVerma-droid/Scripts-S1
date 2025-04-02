@@ -68,3 +68,9 @@ else
 fi
 
 echo "Backup and cleanup completed at $(date +"%Y-%m-%d %H:%M:%S")" | tee -a "$LOG_FILE"
+
+if [ -n "$TMUX" ] && [ "$1" == "--inside-tmux" ]; then
+    echo "Backup complete. Automatically terminating tmux session in 3 seconds..."
+    sleep 3
+    tmux kill-session -t immich-backup
+fi

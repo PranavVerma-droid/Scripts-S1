@@ -761,6 +761,13 @@ case "$1" in
                     cp "$MAIN_LOG" "$BACKUP_FOLDER/backup_log.txt"
                     rotate_backups
                     rm -f "$CHECKPOINT_FILE"
+                    
+                    if [ -n "$TMUX" ] && [ "$2" == "--inside-tmux" ]; then
+                        log "Backup complete. Automatically terminating tmux session in 3 seconds..."
+                        sleep 3
+                        tmux kill-session -t fullserver-backup
+                    fi
+                    
                     exit 0
                 else
                     log "ERROR: Archive backup process failed!"
