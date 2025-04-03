@@ -162,7 +162,6 @@ case "$1" in
         if [ -z "$TMUX" ] && [ "$2" != "--inside-tmux" ]; then
             echo "Starting backup script in a tmux session..."
             
-            # Check if tmux is installed
             if ! command -v tmux &> /dev/null; then
                 echo "tmux is not installed. Please install it with: apt-get install tmux"
                 exit 1
@@ -174,8 +173,8 @@ case "$1" in
             exit 0
         fi
 
-        if [ ! -f "$SCRIPT_DIR/.credentials" ]; then
-            echo -e "\e[31mERROR: Credentials file not found at $SCRIPT_DIR/.credentials\e[0m"
+        if [ ! -f "$SCRIPT_DIR/.backup-env" ]; then
+            echo -e "\e[31mERROR: Credentials file not found at $SCRIPT_DIR/.backup-env\e[0m"
             echo -e "\e[1mPlease Create one and add the following details:\e[0m"
             echo ""
             echo -e "\e[32m#######################"
@@ -226,7 +225,7 @@ case "$1" in
             exit 1
         fi
 
-        source "$SCRIPT_DIR/.credentials"
+        source "$SCRIPT_DIR/.backup-env"
 
         # Validate backup type
         if [ "$BACKUP_TYPE" != "NAS" ] && [ "$BACKUP_TYPE" != "LOCAL" ]; then
@@ -597,8 +596,15 @@ case "$1" in
 
         rotate_backups() {
             log "Checking for old backups to rotate (keeping $MAX_BACKUPS most recent)..."
+
+            local base_path
+            if [ "$BACKUP_TYPE" = "NAS" ]; then
+                base_path="$NAS_MOUNT_POINT"
+            else
+                base_path="$LOCAL_BACKUP_PATH"
+            fi
             
-            local backup_dirs=($(find "$NAS_MOUNT_POINT" -maxdepth 1 -type d -name "server_backup_*" -printf "%T@ %p\n" | sort -n | cut -d' ' -f2-))
+            local backup_dirs=($(find "$base_path" -maxdepth 1 -type d -name "server_backup_*" -printf "%T@ %p\n" | sort -n | cut -d' ' -f2-))
             
             local count=${#backup_dirs[@]}
             local to_delete=$((count - MAX_BACKUPS))
