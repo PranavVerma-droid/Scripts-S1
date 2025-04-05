@@ -50,7 +50,35 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Function to extract YouTube video ID from URL
+# Metadata Editor Check
+if command -v eyeD3 &> /dev/null; then
+    METADATA_TOOL="eyeD3"
+    METADATA_TOOL_AVAILABLE=true
+else
+    echo "No MP3 tag editor found. Metadata updates will be skipped."
+    echo "Please install eyeD3."
+    echo "sudo apt install eyed3"
+    METADATA_TOOL_AVAILABLE=false
+fi
+
+update_mp3_metadata() {
+    local MP3_FILE="$1"
+    
+    if [[ "$METADATA_TOOL_AVAILABLE" == true && -f "$MP3_FILE" ]]; then
+        local FILENAME=$(basename "$MP3_FILE")
+        local TITLE="${FILENAME%.mp3}"
+        
+        echo "Updating filename metadata for: $FILENAME"
+        
+        case "$METADATA_TOOL" in
+            "eyeD3")
+                eyeD3 --title="$TITLE" "$MP3_FILE" >/dev/null 2>&1
+                ;;
+        esac
+    fi
+}
+
+
 get_video_id() {
     local URL="$1"
     local VIDEO_ID=""
@@ -64,7 +92,6 @@ get_video_id() {
     echo "$VIDEO_ID"
 }
 
-# Function to check if a song already exists in the playlist folder
 song_exists() {
     local VIDEO_URL="$1"
     local VIDEO_ID="$2"
@@ -125,7 +152,6 @@ song_exists() {
     return $((1 - found))
 }
 
-# Function to record downloaded song
 record_downloaded_song() {
     local VIDEO_ID="$1"
     local PLAYLIST_FOLDER="$2"
@@ -142,7 +168,6 @@ clean_title() {
     echo "$1" | tr -d '[:punct:]' | tr '[:upper:]' '[:lower:]' | tr -s ' '
 }
 
-# Loop through each playlist URL
 for URL in "${PLAYLISTS[@]}"; do
     echo "Processing $URL..."
 
@@ -181,9 +206,10 @@ for URL in "${PLAYLISTS[@]}"; do
                     
                     if [[ "$(clean_title "$EXISTING_TITLE")" == "$(clean_title "$TITLE")" || "$EXISTING_FILE" == *"$VIDEO_ID"* ]]; then
                         if [[ "$EXISTING_INDEX" != "$FORMATTED_INDEX" ]]; then
-                            NEW_NAME="$PLAYLIST_FOLDER/${FORMATTED_INDEX}-${TITLE}.mp3"
+                            NEW_NAME="$PLAYLIST_FOLDER/${FORMATTED_INDEX} - ${TITLE}.mp3"
                             echo "Updating song index from $EXISTING_INDEX to $FORMATTED_INDEX"
                             mv "$EXISTING_FILE" "$NEW_NAME"
+                            update_mp3_metadata "$NEW_NAME"
                         fi
                         break
                     fi
@@ -191,7 +217,7 @@ for URL in "${PLAYLISTS[@]}"; do
             done
         else
             echo "Downloading song: $TITLE (ID: $VIDEO_ID)"
-            "$DOWNLOADER_PATH" -o "$PLAYLIST_FOLDER/${FORMATTED_INDEX}-%(title)s.%(ext)s" \
+            "$DOWNLOADER_PATH" -o "$PLAYLIST_FOLDER/${FORMATTED_INDEX} - %(title)s.%(ext)s" \
                 --format "bestaudio[ext=m4a]/best" \
                 --extract-audio \
                 --audio-format mp3 \
@@ -203,10 +229,29 @@ for URL in "${PLAYLISTS[@]}"; do
             
             if [ $? -eq 0 ]; then
                 record_downloaded_song "$VIDEO_ID" "$PLAYLIST_FOLDER"
+                DOWNLOADED_FILE="$PLAYLIST_FOLDER/${FORMATTED_INDEX} - ${TITLE}.mp3"
+                update_mp3_metadata "$DOWNLOADED_FILE"
             fi
         fi
     done
 done
+
+if [[ "$METADATA_TOOL_AVAILABLE" == true ]]; then
+    echo "Checking and updating metadata for all existing songs..."
+    for PLAYLIST_DIR in "$BASE_FOLDER"/*; do
+        if [[ -d "$PLAYLIST_DIR" ]]; then
+            PLAYLIST_NAME=$(basename "$PLAYLIST_DIR")
+            echo "Processing playlist folder: $PLAYLIST_NAME"
+            
+            for MP3_FILE in "$PLAYLIST_DIR"/*.mp3; do
+                if [[ -f "$MP3_FILE" ]]; then
+                    update_mp3_metadata "$MP3_FILE"
+                fi
+            done
+        fi
+    done
+    echo "Metadata update completed."
+fi
 
 echo "All downloads completed. Playlists saved to $BASE_FOLDER."
 
