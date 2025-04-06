@@ -76,6 +76,16 @@ get_channel_name() {
     local VIDEO_URL="$1"
     local CHANNEL_NAME=""
     
+    if ! $USE_COOKIES; then
+        local AGE_CHECK
+        AGE_CHECK=$(timeout 30s "$DOWNLOADER_PATH" --print "%(age_limit)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+        
+        if [[ -n "$AGE_CHECK" && "$AGE_CHECK" -ge 18 ]]; then
+            echo "AGE_RESTRICTED"
+            return
+        fi
+    fi
+    
     # Method 1: Direct channel access with increased timeout
     if $USE_COOKIES; then
         CHANNEL_NAME=$(timeout 45s "$DOWNLOADER_PATH" --cookies "$COOKIES_FILE" --print "%(channel)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
@@ -119,6 +129,16 @@ get_channel_name() {
         fi
     fi
     
+    if [[ -z "$CHANNEL_NAME" && ! $USE_COOKIES ]]; then
+        local AGE_CHECK
+        AGE_CHECK=$(timeout 30s "$DOWNLOADER_PATH" --print "%(age_limit)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+        
+        if [[ -n "$AGE_CHECK" && "$AGE_CHECK" -ge 18 ]]; then
+            echo "AGE_RESTRICTED"
+            return
+        fi
+    fi
+    
     if [[ -z "$CHANNEL_NAME" ]]; then
         local VIDEO_TITLE
         if $USE_COOKIES; then
@@ -128,9 +148,9 @@ get_channel_name() {
         fi
         
         if [[ -n "$VIDEO_TITLE" ]]; then
-            echo "Single_Video_${VIDEO_TITLE:0:20}"
+            echo ""
         else
-            echo "YouTube_Creator_$(date +%Y%m%d_%H%M%S)"
+            echo ""
         fi
     else
         echo "$CHANNEL_NAME"
@@ -262,8 +282,31 @@ download_video() {
     
     echo "Processing video: $VIDEO_URL"
     
-    # Get channel name with improved detection
+    if ! $USE_COOKIES; then
+        local AGE_CHECK
+        AGE_CHECK=$(timeout 30s "$DOWNLOADER_PATH" --print "%(age_limit)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
+        
+        if [[ -n "$AGE_CHECK" && "$AGE_CHECK" -ge 18 ]]; then
+            echo -e "\e[33mSkipping age-restricted video (18+): $VIDEO_URL\e[0m"
+            echo -e "To download age-restricted videos, provide cookies in $COOKIES_FILE"
+            return 0
+        fi
+    fi
+
     CREATOR_NAME=$(get_channel_name "$VIDEO_URL")
+
+    if [[ "$CREATOR_NAME" == "AGE_RESTRICTED" ]]; then
+        echo -e "\e[33mSkipping age-restricted video (18+): $VIDEO_URL\e[0m"
+        echo -e "To download age-restricted videos, provide cookies in $COOKIES_FILE"
+        return 0
+    fi
+    
+    if [[ -z "$CREATOR_NAME" ]]; then
+        echo -e "\e[31mERROR: Could not determine channel/creator name for $VIDEO_URL\e[0m"
+        echo -e "Skipping download to avoid creating random folders."
+        echo -e "This might be due to the video being unavailable or region-restricted."
+        return 1
+    fi
     
     # Create folder structure
     CREATOR_FOLDER="$BASE_FOLDER/$CREATOR_NAME"
