@@ -16,6 +16,9 @@ fi
 
 source "$SCRIPT_DIR/.songs-env"
 
+# Add global variable to track matched files
+MATCHED_FILE=""
+
 # Record Filename Check
 if [ -z "$RECORD_FILE_NAME" ]; then
     RECORD_FILE_NAME=".downloaded_videos.txt"
@@ -99,9 +102,50 @@ song_exists() {
     local PLAYLIST_FOLDER="$4"
     local CLEAN_TITLE=$(clean_title "$SONG_TITLE")
     
+    # Reset the global matched file
+    MATCHED_FILE=""
+    
     local RECORD_FILE="$PLAYLIST_FOLDER/$RECORD_FILE_NAME"
     if [[ -f "$RECORD_FILE" && $(grep -c "$VIDEO_ID" "$RECORD_FILE") -gt 0 ]]; then
         echo "Found video ID match in record file: $VIDEO_ID"
+        
+        # Find which file corresponds to this video ID by checking for title similarity
+        for existing_file in "$PLAYLIST_FOLDER"/*.mp3; do
+            if [[ -f "$existing_file" ]]; then
+                local existing_basename=$(basename "$existing_file")
+                local existing_title=${existing_basename#[0-9]*-}
+                existing_title=${existing_title%.mp3}
+                
+                local normalized_name=$(clean_title "$existing_title")
+                
+                local similarity=0
+                local match_threshold=70
+                
+                local title_words=($CLEAN_TITLE)
+                local common_words=0
+                local total_words=${#title_words[@]}
+                
+                for word in "${title_words[@]}"; do
+                    if [[ ${#word} -lt 3 ]]; then continue; fi
+                    
+                    if [[ "$normalized_name" == *"$word"* ]]; then
+                        ((common_words++))
+                    fi
+                done
+                
+                if [[ $total_words -gt 0 ]]; then
+                    similarity=$((common_words * 100 / total_words))
+                fi
+                
+                if [[ $similarity -ge $match_threshold || "$normalized_name" == *"$CLEAN_TITLE"* || "$CLEAN_TITLE" == *"$normalized_name"* ]]; then
+                    MATCHED_FILE="$existing_file"
+                    echo "Found matching file for video ID $VIDEO_ID: $existing_file"
+                    return 0
+                fi
+            fi
+        done
+        
+        # If no specific file matched but the ID is in the record, just return true
         return 0
     fi
     
@@ -143,6 +187,9 @@ song_exists() {
                         mkdir -p "$PLAYLIST_FOLDER"
                         echo "$VIDEO_ID" >> "$RECORD_FILE"
                     fi
+                    
+                    # Set the matched file
+                    MATCHED_FILE="$existing_file"
                     break
                 fi
             fi
@@ -197,24 +244,19 @@ for URL in "${PLAYLISTS[@]}"; do
         if song_exists "$VIDEO_URL" "$VIDEO_ID" "$TITLE" "$PLAYLIST_FOLDER"; then
             echo "Song '$TITLE' already exists in $PLAYLIST_FOLDER, checking for index updates..."
             
-            for EXISTING_FILE in "$PLAYLIST_FOLDER"/*.mp3; do
-                if [[ -f "$EXISTING_FILE" ]]; then
-                    EXISTING_BASENAME=$(basename "$EXISTING_FILE")
-                    EXISTING_INDEX=${EXISTING_BASENAME%%-*}
-                    EXISTING_TITLE=${EXISTING_BASENAME#[0-9]*-}
-                    EXISTING_TITLE=${EXISTING_TITLE%.mp3}
-                    
-                    if [[ "$(clean_title "$EXISTING_TITLE")" == "$(clean_title "$TITLE")" || "$EXISTING_FILE" == *"$VIDEO_ID"* ]]; then
-                        if [[ "$EXISTING_INDEX" != "$FORMATTED_INDEX" ]]; then
-                            NEW_NAME="$PLAYLIST_FOLDER/${FORMATTED_INDEX} - ${TITLE}.mp3"
-                            echo "Updating song index from $EXISTING_INDEX to $FORMATTED_INDEX"
-                            mv "$EXISTING_FILE" "$NEW_NAME"
-                            update_mp3_metadata "$NEW_NAME"
-                        fi
-                        break
-                    fi
+            if [[ -n "$MATCHED_FILE" && -f "$MATCHED_FILE" ]]; then
+                EXISTING_BASENAME=$(basename "$MATCHED_FILE")
+                EXISTING_INDEX=${EXISTING_BASENAME%%-*}
+                
+                if [[ "$EXISTING_INDEX" != "$FORMATTED_INDEX" ]]; then
+                    NEW_NAME="$PLAYLIST_FOLDER/${FORMATTED_INDEX} - ${TITLE}.mp3"
+                    echo "Updating song index from $EXISTING_INDEX to $FORMATTED_INDEX"
+                    mv "$MATCHED_FILE" "$NEW_NAME"
+                    update_mp3_metadata "$NEW_NAME"
                 fi
-            done
+            else
+                echo "Matched file not found or not accessible, skipping rename"
+            fi
         else
             echo "Downloading song: $TITLE (ID: $VIDEO_ID)"
             "$DOWNLOADER_PATH" -o "$PLAYLIST_FOLDER/${FORMATTED_INDEX} - %(title)s.%(ext)s" \
