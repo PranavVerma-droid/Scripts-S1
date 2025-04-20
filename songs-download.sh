@@ -237,7 +237,16 @@ for URL in "${PLAYLISTS[@]}"; do
             continue
         fi
         
-        FORMATTED_INDEX=$(printf "%03d" "$((10#$INDEX))")
+        # Fix parsing of INDEX - ensure it's treated as a number
+        INDEX=$(echo "$INDEX" | sed 's/^0*//')
+        if [[ -z "$INDEX" ]]; then
+            INDEX=1
+        fi
+        
+        # Format the index with leading zeros
+        FORMATTED_INDEX=$(printf "%03d" "$INDEX")
+        
+        echo "Processing song: $TITLE (Position: $INDEX, Formatted: $FORMATTED_INDEX)"
         
         VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
         
@@ -246,13 +255,26 @@ for URL in "${PLAYLISTS[@]}"; do
             
             if [[ -n "$MATCHED_FILE" && -f "$MATCHED_FILE" ]]; then
                 EXISTING_BASENAME=$(basename "$MATCHED_FILE")
-                EXISTING_INDEX=${EXISTING_BASENAME%%-*}
+                
+                # Improved extraction of current index from filename
+                if [[ "$EXISTING_BASENAME" =~ ^([0-9]{3})\ -\ (.*)\.mp3$ ]]; then
+                    EXISTING_INDEX="${BASH_REMATCH[1]}"
+                    EXISTING_TITLE="${BASH_REMATCH[2]}"
+                else
+                    echo "Warning: Cannot parse index from filename: $EXISTING_BASENAME"
+                    continue
+                fi
+                
+                echo "Current file index: $EXISTING_INDEX, New index: $FORMATTED_INDEX"
                 
                 if [[ "$EXISTING_INDEX" != "$FORMATTED_INDEX" ]]; then
                     NEW_NAME="$PLAYLIST_FOLDER/${FORMATTED_INDEX} - ${TITLE}.mp3"
                     echo "Updating song index from $EXISTING_INDEX to $FORMATTED_INDEX"
+                    echo "Renaming: $MATCHED_FILE -> $NEW_NAME"
                     mv "$MATCHED_FILE" "$NEW_NAME"
                     update_mp3_metadata "$NEW_NAME"
+                else
+                    echo "Index unchanged, no need to rename"
                 fi
             else
                 echo "Matched file not found or not accessible, skipping rename"
