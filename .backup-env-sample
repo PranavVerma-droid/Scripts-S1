@@ -1,0 +1,38 @@
+# Sample Backup Env Configuration.
+# Change According to Your Needs.
+
+# Backup Configuration
+export BACKUP_DIR="/backup/server"
+export BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+export BACKUP_SESSION_DIR="$BACKUP_DIR/backup_$BACKUP_TIMESTAMP"
+export TEMP_DIR="/tmp/backup_$BACKUP_TIMESTAMP"
+export MAX_PARALLEL_JOBS=4
+export MAX_BACKUPS=3
+
+# GPG Configuration
+export GPG_KEY_ID="your-gpg-key-id"
+
+# Folders to backup (format: path:zip:encrypt)
+# zip: true/false - whether to zip the folder
+# encrypt: true/false - whether to encrypt (zip file or individual files)
+export BACKUP_FOLDERS=(
+    "/var/www:true:true"
+    "/photos:true:false"
+    "/backups:false:true"
+    "/scripts:true:false"
+    "/songs:false:false"
+    "/servers:true:true"
+    "/github:true:false"
+)
+
+# Files to backup (format: path:encrypt)
+# encrypt: true/false - whether to encrypt the file
+export BACKUP_FILES=(
+    "/etc/fstab:true"
+    "/etc/crontab:true"
+    "/var/spool/cron/crontabs/root:true"
+    "/etc/hosts:false"
+)
+
+# Logging
+export LOG_LEVEL="INFO"  # DEBUG, INFO, WARN, ERROR
