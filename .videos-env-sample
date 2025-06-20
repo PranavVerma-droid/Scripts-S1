@@ -1,0 +1,25 @@
+# Sample Videos Env.
+# Change to your Requirements.
+
+export BASE_FOLDER="/videos/"
+export COOKIES_FILE="/scripts/cookies.txt"
+export DOWNLOADER_PATH="/videos/yt-dlp"
+export RECORD_FILE_NAME=".downloaded_videos.txt"
+
+declare -a VIDEO_SOURCES=(
+"https://www.youtube.com/playlist?list=PLAhTBeRe8IhMmRve_rSfAgL_dtEXkKh8Z"
+"https://www.youtube.com/playlist?list=PLVHVLN5L-O1V23E98aaC1PUmouojOg0za"
+"https://www.youtube.com/playlist?list=PLFs4vir_WsTxontcYm5ctqp89cNBJKNrs"
+"https://www.youtube.com/playlist?list=PLFs4vir_WsTygaVbFuJquGLnjwc9Jmdz8"
+"https://www.youtube.com/playlist?list=PLwKUi9nhBJw3LVkoitTDjF4NQdTGOJn8N"
+"https://youtu.be/-lyyIvxy2Z4?si=-k3ZCS9BajcbL2VT"
+"https://youtu.be/-lyyIvxy2Z4?si=5f73j45oArAz-RXm"
+"https://youtube.com/playlist?list=PLfTw0vjPFmR1vTNv9ZCfPnfuMEgqnVJB_&si=CMICA4YlHfZm_JeL"
+"https://youtube.com/playlist?list=PLfTw0vjPFmR3It4jYbQawuD3fK4bh6eh1&si=58GxGaG9tWgQICyw"
+"https://youtu.be/swUmDfuaGqE?si=PpZL0E7HJlvEWYOw"
+"https://youtu.be/0EGezRVeqx0?si=9v1F-Ok3iy3lCaGR"
+"https://youtu.be/J5jGb1KsYmI?si=kttDradqBaNtOTGs"
+"https://youtu.be/0jrkmjfiaIg?si=dKH_xQ9X6VvVupfY"
+"https://youtu.be/rN5f72lhJz8?si=yojfiwAMF8QtwfrS"
+"https://www.youtube.com/playlist?list=PL7z8SQeih5Af9B2DshZul4KvTLI74NkUQ"
+)
