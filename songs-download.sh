@@ -100,103 +100,26 @@ song_exists() {
     local VIDEO_ID="$2"
     local SONG_TITLE="$3"
     local PLAYLIST_FOLDER="$4"
-    local CLEAN_TITLE=$(clean_title "$SONG_TITLE")
     
     # Reset the global matched file
     MATCHED_FILE=""
     
     local RECORD_FILE="$PLAYLIST_FOLDER/$RECORD_FILE_NAME"
-    if [[ -f "$RECORD_FILE" && $(grep -c "$VIDEO_ID" "$RECORD_FILE") -gt 0 ]]; then
-        echo "Found video ID match in record file: $VIDEO_ID"
+    if [[ -f "$RECORD_FILE" && $(grep -c "^$VIDEO_ID$" "$RECORD_FILE") -gt 0 ]]; then
+        echo "Found video ID in record file: $VIDEO_ID"
         
-        # Find which file corresponds to this video ID by checking for title similarity
+        # Find the corresponding file for renaming purposes
         for existing_file in "$PLAYLIST_FOLDER"/*.mp3; do
             if [[ -f "$existing_file" ]]; then
-                local existing_basename=$(basename "$existing_file")
-                local existing_title=${existing_basename#[0-9]*-}
-                existing_title=${existing_title%.mp3}
-                
-                local normalized_name=$(clean_title "$existing_title")
-                
-                local similarity=0
-                local match_threshold=70
-                
-                local title_words=($CLEAN_TITLE)
-                local common_words=0
-                local total_words=${#title_words[@]}
-                
-                for word in "${title_words[@]}"; do
-                    if [[ ${#word} -lt 3 ]]; then continue; fi
-                    
-                    if [[ "$normalized_name" == *"$word"* ]]; then
-                        ((common_words++))
-                    fi
-                done
-                
-                if [[ $total_words -gt 0 ]]; then
-                    similarity=$((common_words * 100 / total_words))
-                fi
-                
-                if [[ $similarity -ge $match_threshold || "$normalized_name" == *"$CLEAN_TITLE"* || "$CLEAN_TITLE" == *"$normalized_name"* ]]; then
-                    MATCHED_FILE="$existing_file"
-                    echo "Found matching file for video ID $VIDEO_ID: $existing_file"
-                    return 0
-                fi
+                MATCHED_FILE="$existing_file"
+                break
             fi
         done
         
-        # If no specific file matched but the ID is in the record, just return true
         return 0
     fi
     
-    local found=0
-    if [[ -d "$PLAYLIST_FOLDER" ]]; then
-        for existing_file in "$PLAYLIST_FOLDER"/*.mp3; do
-            if [[ -f "$existing_file" ]]; then
-                local existing_basename=$(basename "$existing_file")
-                local existing_title=${existing_basename#[0-9]*-}
-                existing_title=${existing_title%.mp3}
-                
-                local normalized_name=$(clean_title "$existing_title")
-                
-                local similarity=0
-                local match_threshold=70
-                
-                local title_words=($CLEAN_TITLE)
-                local name_words=($normalized_name)
-                local common_words=0
-                local total_words=${#title_words[@]}
-                
-                for word in "${title_words[@]}"; do
-                    if [[ ${#word} -lt 3 ]]; then continue; fi
-                    
-                    if [[ "$normalized_name" == *"$word"* ]]; then
-                        ((common_words++))
-                    fi
-                done
-                
-                if [[ $total_words -gt 0 ]]; then
-                    similarity=$((common_words * 100 / total_words))
-                fi
-                
-                if [[ $similarity -ge $match_threshold || "$normalized_name" == *"$CLEAN_TITLE"* || "$CLEAN_TITLE" == *"$normalized_name"* ]]; then
-                    found=1
-                    echo "Found existing song by title match: $existing_file (Similarity: $similarity%)"
-                    
-                    if [[ -n "$VIDEO_ID" ]]; then
-                        mkdir -p "$PLAYLIST_FOLDER"
-                        echo "$VIDEO_ID" >> "$RECORD_FILE"
-                    fi
-                    
-                    # Set the matched file
-                    MATCHED_FILE="$existing_file"
-                    break
-                fi
-            fi
-        done
-    fi
-    
-    return $((1 - found))
+    return 1
 }
 
 record_downloaded_song() {
@@ -251,7 +174,16 @@ for URL in "${PLAYLISTS[@]}"; do
         VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
         
         if song_exists "$VIDEO_URL" "$VIDEO_ID" "$TITLE" "$PLAYLIST_FOLDER"; then
-            echo "Song '$TITLE' already exists in $PLAYLIST_FOLDER, checking for index updates..."
+            echo "Song '$TITLE' already exists in record, checking for index updates..."
+            
+            # Find the file that corresponds to this video ID by checking all mp3 files
+            MATCHED_FILE=""
+            for existing_file in "$PLAYLIST_FOLDER"/*.mp3; do
+                if [[ -f "$existing_file" ]]; then
+                    MATCHED_FILE="$existing_file"
+                    break
+                fi
+            done
             
             if [[ -n "$MATCHED_FILE" && -f "$MATCHED_FILE" ]]; then
                 EXISTING_BASENAME=$(basename "$MATCHED_FILE")
@@ -277,7 +209,7 @@ for URL in "${PLAYLISTS[@]}"; do
                     echo "Index unchanged, no need to rename"
                 fi
             else
-                echo "Matched file not found or not accessible, skipping rename"
+                echo "No mp3 files found in folder for renaming"
             fi
         else
             echo "Downloading song: $TITLE (ID: $VIDEO_ID)"
