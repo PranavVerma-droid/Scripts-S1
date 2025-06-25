@@ -154,11 +154,33 @@ process_playlist() {
     
     echo "$PREFIX Processing $URL..."
 
-    PLAYLIST_NAME=$(timeout 20s "$DOWNLOADER_PATH" --print "%(playlist_title)s" "$URL" 2>/dev/null | head -n 1)
-
-    if [[ -z "$PLAYLIST_NAME" ]]; then
-        echo "$PREFIX Failed to fetch playlist title for $URL. Skipping..."
-        return
+    # Try to get playlist name with longer timeout and better error handling
+    echo "$PREFIX Attempting to fetch playlist title..."
+    PLAYLIST_NAME=$(timeout 60s "$DOWNLOADER_PATH" --print "%(playlist_title)s" "$URL" 2>&1 | head -n 1)
+    
+    # Check if the command failed or returned empty
+    if [[ -z "$PLAYLIST_NAME" || "$PLAYLIST_NAME" == *"ERROR"* || "$PLAYLIST_NAME" == *"WARNING"* ]]; then
+        echo "$PREFIX Failed to fetch playlist title, trying alternative method..."
+        
+        # Try with different approach - extract playlist info
+        PLAYLIST_NAME=$(timeout 60s "$DOWNLOADER_PATH" --flat-playlist --print "%(playlist_title)s" "$URL" 2>/dev/null | head -n 1)
+        
+        # If still empty, create a fallback name from URL
+        if [[ -z "$PLAYLIST_NAME" || "$PLAYLIST_NAME" == *"ERROR"* ]]; then
+            # Extract playlist ID from URL and use it as name
+            if [[ "$URL" =~ list=([^&]+) ]]; then
+                PLAYLIST_ID="${BASH_REMATCH[1]}"
+                PLAYLIST_NAME="Playlist_${PLAYLIST_ID}"
+                echo "$PREFIX Using fallback playlist name: $PLAYLIST_NAME"
+            else
+                echo "$PREFIX Failed to extract playlist ID from URL. Skipping..."
+                return
+            fi
+        else
+            echo "$PREFIX Successfully fetched playlist title with alternative method: $PLAYLIST_NAME"
+        fi
+    else
+        echo "$PREFIX Successfully fetched playlist title: $PLAYLIST_NAME"
     fi
 
     PLAYLIST_FOLDER="$BASE_FOLDER/$PLAYLIST_NAME"
