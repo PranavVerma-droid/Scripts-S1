@@ -342,6 +342,17 @@ fi
 
 echo "All downloads completed. Playlists saved to $BASE_FOLDER."
 
+# Clean up any folders with generic names that start with "Playlist_"
+echo "Cleaning up folders with generic names..."
+for folder in "$BASE_FOLDER"/Playlist_*; do
+    if [[ -d "$folder" ]]; then
+        folder_name=$(basename "$folder")
+        echo "Removing generic folder: $folder_name"
+        rm -rf "$folder"
+    fi
+done
+echo "Cleanup completed."
+
 if [ -n "$TMUX" ] && [ "$1" == "--inside-tmux" ]; then
     echo "Downloads complete. Automatically terminating tmux session in 3 seconds..."
     sleep 3
