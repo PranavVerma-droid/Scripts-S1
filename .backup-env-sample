@@ -1,6 +1,5 @@
 # Sample Backup Env Configuration.
 # Change According to Your Needs.
-# Rename this to `.backup-env`
 
 # Backup Configuration
 export BACKUP_DIR="/backup/server"

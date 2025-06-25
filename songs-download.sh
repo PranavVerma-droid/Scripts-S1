@@ -25,12 +25,6 @@ if [ -z "$RECORD_FILE_NAME" ]; then
     echo "RECORD_FILE_NAME not defined in .songs-env, using default: $RECORD_FILE_NAME"
 fi
 
-# Parallel Limit Check
-if [ -z "$PARALLEL_LIMIT" ]; then
-    PARALLEL_LIMIT=4
-    echo "PARALLEL_LIMIT not defined in .songs-env, using default: $PARALLEL_LIMIT"
-fi
-
 # Tmux Check
 if [ -z "$TMUX" ] && [ "$1" != "--inside-tmux" ]; then
     echo "Starting download script in a tmux session..."
@@ -144,63 +138,25 @@ clean_title() {
     echo "$1" | tr -d '[:punct:]' | tr '[:upper:]' '[:lower:]' | tr -s ' '
 }
 
-# Function to process a single playlist
-process_playlist() {
-    local URL="$1"
-    local PLAYLIST_NUM="$2"
-    
-    # Create a unique prefix for this playlist's output
-    local PREFIX="[Playlist $PLAYLIST_NUM]"
-    
-    echo "$PREFIX Processing $URL..."
+for URL in "${PLAYLISTS[@]}"; do
+    echo "Processing $URL..."
 
-    # Try to get playlist name with longer timeout and better error handling
-    echo "$PREFIX Attempting to fetch playlist title..."
-    PLAYLIST_NAME=$(timeout 60s "$DOWNLOADER_PATH" --print "%(playlist_title)s" "$URL" 2>&1 | head -n 1)
-    
-    # Check if the command failed or returned empty
-    if [[ -z "$PLAYLIST_NAME" || "$PLAYLIST_NAME" == *"ERROR"* || "$PLAYLIST_NAME" == *"WARNING"* ]]; then
-        echo "$PREFIX Failed to fetch playlist title, trying alternative method..."
-        
-        # Try with different approach - extract playlist info
-        PLAYLIST_NAME=$(timeout 60s "$DOWNLOADER_PATH" --flat-playlist --print "%(playlist_title)s" "$URL" 2>/dev/null | head -n 1)
-        
-        # If still empty, create a fallback name from URL
-        if [[ -z "$PLAYLIST_NAME" || "$PLAYLIST_NAME" == *"ERROR"* ]]; then
-            # Extract playlist ID from URL and use it as name
-            if [[ "$URL" =~ list=([^&]+) ]]; then
-                PLAYLIST_ID="${BASH_REMATCH[1]}"
-                PLAYLIST_NAME="Playlist_${PLAYLIST_ID}"
-                echo "$PREFIX Using fallback playlist name: $PLAYLIST_NAME"
-            else
-                echo "$PREFIX Failed to extract playlist ID from URL. Skipping..."
-                return
-            fi
-        else
-            echo "$PREFIX Successfully fetched playlist title with alternative method: $PLAYLIST_NAME"
-        fi
-    else
-        echo "$PREFIX Successfully fetched playlist title: $PLAYLIST_NAME"
+    PLAYLIST_NAME=$(timeout 20s "$DOWNLOADER_PATH" --print "%(playlist_title)s" "$URL" 2>/dev/null | head -n 1)
+
+    if [[ -z "$PLAYLIST_NAME" ]]; then
+        echo "Failed to fetch playlist title for $URL. Skipping..."
+        continue
     fi
 
     PLAYLIST_FOLDER="$BASE_FOLDER/$PLAYLIST_NAME"
 
     mkdir -p "$PLAYLIST_FOLDER"
     
-    echo "$PREFIX Retrieving song list for '$PLAYLIST_NAME'..."
-    SONG_LIST=$(timeout 60s "$DOWNLOADER_PATH" --flat-playlist --print "%(playlist_index)s|||%(title)s|||%(id)s" "$URL" 2>/dev/null)
+    echo "Retrieving song list for '$PLAYLIST_NAME'..."
+    SONG_LIST=$(timeout 60s "$DOWNLOADER_PATH" --flat-playlist --print "%(playlist_index)s:%(title)s:%(id)s" "$URL" 2>/dev/null)
     
-    echo "$SONG_LIST" | while IFS='|||' read -r INDEX TITLE VIDEO_ID; do
+    echo "$SONG_LIST" | while IFS=: read -r INDEX TITLE VIDEO_ID; do
         if [[ -z "$INDEX" || -z "$TITLE" || -z "$VIDEO_ID" ]]; then
-            continue
-        fi
-        
-        # Clean up video ID - remove any URL encoding or extra characters
-        VIDEO_ID=$(echo "$VIDEO_ID" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | sed 's/[^a-zA-Z0-9_-].*//')
-        
-        # Validate video ID format (YouTube video IDs are 11 characters of alphanumeric, underscore, hyphen)
-        if [[ ! "$VIDEO_ID" =~ ^[a-zA-Z0-9_-]{11}$ ]]; then
-            echo "$PREFIX Warning: Invalid video ID format '$VIDEO_ID', skipping..."
             continue
         fi
         
@@ -213,12 +169,12 @@ process_playlist() {
         # Format the index with leading zeros
         FORMATTED_INDEX=$(printf "%03d" "$INDEX")
         
-        echo "$PREFIX Processing song: $TITLE (Position: $INDEX, Formatted: $FORMATTED_INDEX)"
+        echo "Processing song: $TITLE (Position: $INDEX, Formatted: $FORMATTED_INDEX)"
         
         VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
         
         if song_exists "$VIDEO_URL" "$VIDEO_ID" "$TITLE" "$PLAYLIST_FOLDER"; then
-            echo "$PREFIX Song '$TITLE' already exists in record, checking for index updates..."
+            echo "Song '$TITLE' already exists in record, checking for index updates..."
             
             # Find the file that corresponds to this video ID by checking all mp3 files
             MATCHED_FILE=""
@@ -237,26 +193,26 @@ process_playlist() {
                     EXISTING_INDEX="${BASH_REMATCH[1]}"
                     EXISTING_TITLE="${BASH_REMATCH[2]}"
                 else
-                    echo "$PREFIX Warning: Cannot parse index from filename: $EXISTING_BASENAME"
+                    echo "Warning: Cannot parse index from filename: $EXISTING_BASENAME"
                     continue
                 fi
                 
-                echo "$PREFIX Current file index: $EXISTING_INDEX, New index: $FORMATTED_INDEX"
+                echo "Current file index: $EXISTING_INDEX, New index: $FORMATTED_INDEX"
                 
                 if [[ "$EXISTING_INDEX" != "$FORMATTED_INDEX" ]]; then
                     NEW_NAME="$PLAYLIST_FOLDER/${FORMATTED_INDEX} - ${TITLE}.mp3"
-                    echo "$PREFIX Updating song index from $EXISTING_INDEX to $FORMATTED_INDEX"
-                    echo "$PREFIX Renaming: $MATCHED_FILE -> $NEW_NAME"
+                    echo "Updating song index from $EXISTING_INDEX to $FORMATTED_INDEX"
+                    echo "Renaming: $MATCHED_FILE -> $NEW_NAME"
                     mv "$MATCHED_FILE" "$NEW_NAME"
                     update_mp3_metadata "$NEW_NAME"
                 else
-                    echo "$PREFIX Index unchanged, no need to rename"
+                    echo "Index unchanged, no need to rename"
                 fi
             else
-                echo "$PREFIX No mp3 files found in folder for renaming"
+                echo "No mp3 files found in folder for renaming"
             fi
         else
-            echo "$PREFIX Downloading song: $TITLE (ID: $VIDEO_ID)"
+            echo "Downloading song: $TITLE (ID: $VIDEO_ID)"
             "$DOWNLOADER_PATH" -o "$PLAYLIST_FOLDER/${FORMATTED_INDEX} - %(title)s.%(ext)s" \
                 --format "bestaudio[ext=m4a]/best" \
                 --extract-audio \
@@ -271,57 +227,10 @@ process_playlist() {
                 record_downloaded_song "$VIDEO_ID" "$PLAYLIST_FOLDER"
                 DOWNLOADED_FILE="$PLAYLIST_FOLDER/${FORMATTED_INDEX} - ${TITLE}.mp3"
                 update_mp3_metadata "$DOWNLOADED_FILE"
-                echo "$PREFIX Successfully downloaded: $TITLE"
-            else
-                echo "$PREFIX Failed to download: $TITLE"
             fi
         fi
     done
-    
-    echo "$PREFIX Completed processing playlist: $PLAYLIST_NAME"
-}
-
-# Process all playlists with parallel limit
-echo "Starting processing of ${#PLAYLISTS[@]} playlists with parallel limit of $PARALLEL_LIMIT..."
-pids=()
-playlist_count=0
-
-for URL in "${PLAYLISTS[@]}"; do
-    # Wait if we've reached the parallel limit
-    while [ ${#pids[@]} -ge $PARALLEL_LIMIT ]; do
-        # Check for completed processes
-        new_pids=()
-        for pid in "${pids[@]}"; do
-            if kill -0 $pid 2>/dev/null; then
-                new_pids+=($pid)
-            else
-                wait $pid
-                echo "Playlist process $pid completed"
-            fi
-        done
-        pids=("${new_pids[@]}")
-        
-        # Small delay to avoid busy waiting
-        if [ ${#pids[@]} -ge $PARALLEL_LIMIT ]; then
-            sleep 1
-        fi
-    done
-    
-    # Start new playlist process
-    ((playlist_count++))
-    process_playlist "$URL" "$playlist_count" &
-    pids+=($!)
-    echo "Started processing playlist $playlist_count: $URL (PID: $!)"
 done
-
-# Wait for all remaining background processes to complete
-echo "Waiting for remaining playlist downloads to complete..."
-for pid in "${pids[@]}"; do
-    wait $pid
-    echo "Playlist process $pid completed"
-done
-
-echo "All playlist downloads completed!"
 
 if [[ "$METADATA_TOOL_AVAILABLE" == true ]]; then
     echo "Checking and updating metadata for all existing songs..."
@@ -341,17 +250,6 @@ if [[ "$METADATA_TOOL_AVAILABLE" == true ]]; then
 fi
 
 echo "All downloads completed. Playlists saved to $BASE_FOLDER."
-
-# Clean up any folders with generic names that start with "Playlist_"
-echo "Cleaning up folders with generic names..."
-for folder in "$BASE_FOLDER"/Playlist_*; do
-    if [[ -d "$folder" ]]; then
-        folder_name=$(basename "$folder")
-        echo "Removing generic folder: $folder_name"
-        rm -rf "$folder"
-    fi
-done
-echo "Cleanup completed."
 
 if [ -n "$TMUX" ] && [ "$1" == "--inside-tmux" ]; then
     echo "Downloads complete. Automatically terminating tmux session in 3 seconds..."
