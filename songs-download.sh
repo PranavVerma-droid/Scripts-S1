@@ -166,10 +166,19 @@ process_playlist() {
     mkdir -p "$PLAYLIST_FOLDER"
     
     echo "$PREFIX Retrieving song list for '$PLAYLIST_NAME'..."
-    SONG_LIST=$(timeout 60s "$DOWNLOADER_PATH" --flat-playlist --print "%(playlist_index)s:%(title)s:%(id)s" "$URL" 2>/dev/null)
+    SONG_LIST=$(timeout 60s "$DOWNLOADER_PATH" --flat-playlist --print "%(playlist_index)s|||%(title)s|||%(id)s" "$URL" 2>/dev/null)
     
-    echo "$SONG_LIST" | while IFS=: read -r INDEX TITLE VIDEO_ID; do
+    echo "$SONG_LIST" | while IFS='|||' read -r INDEX TITLE VIDEO_ID; do
         if [[ -z "$INDEX" || -z "$TITLE" || -z "$VIDEO_ID" ]]; then
+            continue
+        fi
+        
+        # Clean up video ID - remove any URL encoding or extra characters
+        VIDEO_ID=$(echo "$VIDEO_ID" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | sed 's/[^a-zA-Z0-9_-].*//')
+        
+        # Validate video ID format (YouTube video IDs are 11 characters of alphanumeric, underscore, hyphen)
+        if [[ ! "$VIDEO_ID" =~ ^[a-zA-Z0-9_-]{11}$ ]]; then
+            echo "$PREFIX Warning: Invalid video ID format '$VIDEO_ID', skipping..."
             continue
         fi
         
