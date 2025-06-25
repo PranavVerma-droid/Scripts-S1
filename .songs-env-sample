@@ -1,9 +1,11 @@
 # Sample Songs Env.
 # Change to Your Requirements.
+# Rename this to `.songs-env`
 
 export BASE_FOLDER="/songs/"
 export DOWNLOADER_PATH="/songs/yt-dlp"
 export RECORD_FILE_NAME=".downloaded_videos.txt"
+export PARALLEL_LIMIT=4
 declare -a PLAYLISTS=(
 "https://music.youtube.com/browse/VLPLByuInhy-5qFhoPhBi9KFAXrANjd7U7Fa"
 )

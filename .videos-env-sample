@@ -1,10 +1,12 @@
 # Sample Videos Env.
 # Change to your Requirements.
+# Rename this to `.videos-env`
 
 export BASE_FOLDER="/videos/"
 export COOKIES_FILE="/scripts/cookies.txt"
 export DOWNLOADER_PATH="/videos/yt-dlp"
 export RECORD_FILE_NAME=".downloaded_videos.txt"
+export PARALLEL_LIMIT=4
 
 declare -a VIDEO_SOURCES=(
 "https://www.youtube.com/playlist?list=PLAhTBeRe8IhMmRve_rSfAgL_dtEXkKh8Z"

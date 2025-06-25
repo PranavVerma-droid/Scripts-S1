@@ -23,6 +23,12 @@ if [ -z "$RECORD_FILE_NAME" ]; then
     echo "RECORD_FILE_NAME not defined in .videos-env, using default: $RECORD_FILE_NAME"
 fi
 
+# Parallel Limit Check
+if [ -z "$PARALLEL_LIMIT" ]; then
+    PARALLEL_LIMIT=3
+    echo "PARALLEL_LIMIT not defined in .videos-env, using default: $PARALLEL_LIMIT"
+fi
+
 # Tmux Check
 if [ -z "$TMUX" ] && [ "$1" != "--inside-tmux" ]; then
     echo "Starting download script in a tmux session..."
@@ -279,16 +285,20 @@ record_downloaded_video() {
 # Function to download a single video and save it in creator's folder
 download_video() {
     local VIDEO_URL="$1"
+    local SOURCE_NUM="$2"
     
-    echo "Processing video: $VIDEO_URL"
+    # Create a unique prefix for this source's output
+    local PREFIX="[Source $SOURCE_NUM]"
+    
+    echo "$PREFIX Processing video: $VIDEO_URL"
     
     if ! $USE_COOKIES; then
         local AGE_CHECK
         AGE_CHECK=$(timeout 30s "$DOWNLOADER_PATH" --print "%(age_limit)s" "$VIDEO_URL" 2>/dev/null | head -n 1)
         
         if [[ -n "$AGE_CHECK" && "$AGE_CHECK" -ge 18 ]]; then
-            echo -e "\e[33mSkipping age-restricted video (18+): $VIDEO_URL\e[0m"
-            echo -e "To download age-restricted videos, provide cookies in $COOKIES_FILE"
+            echo -e "$PREFIX \e[33mSkipping age-restricted video (18+): $VIDEO_URL\e[0m"
+            echo -e "$PREFIX To download age-restricted videos, provide cookies in $COOKIES_FILE"
             return 0
         fi
     fi
@@ -296,15 +306,15 @@ download_video() {
     CREATOR_NAME=$(get_channel_name "$VIDEO_URL")
 
     if [[ "$CREATOR_NAME" == "AGE_RESTRICTED" ]]; then
-        echo -e "\e[33mSkipping age-restricted video (18+): $VIDEO_URL\e[0m"
-        echo -e "To download age-restricted videos, provide cookies in $COOKIES_FILE"
+        echo -e "$PREFIX \e[33mSkipping age-restricted video (18+): $VIDEO_URL\e[0m"
+        echo -e "$PREFIX To download age-restricted videos, provide cookies in $COOKIES_FILE"
         return 0
     fi
     
     if [[ -z "$CREATOR_NAME" ]]; then
-        echo -e "\e[31mERROR: Could not determine channel/creator name for $VIDEO_URL\e[0m"
-        echo -e "Skipping download to avoid creating random folders."
-        echo -e "This might be due to the video being unavailable or region-restricted."
+        echo -e "$PREFIX \e[31mERROR: Could not determine channel/creator name for $VIDEO_URL\e[0m"
+        echo -e "$PREFIX Skipping download to avoid creating random folders."
+        echo -e "$PREFIX This might be due to the video being unavailable or region-restricted."
         return 1
     fi
     
@@ -314,11 +324,11 @@ download_video() {
     
     # Check if video already exists
     if video_exists "$VIDEO_URL" "$CREATOR_FOLDER"; then
-        echo "Video already exists in $CREATOR_FOLDER, skipping download."
+        echo "$PREFIX Video already exists in $CREATOR_FOLDER, skipping download."
         return 0
     fi
     
-    echo "Downloading to creator folder: $CREATOR_NAME"
+    echo "$PREFIX Downloading to creator folder: $CREATOR_NAME"
     
     # Set up base command
     local DOWNLOAD_OPTS=(
@@ -348,7 +358,7 @@ download_video() {
         
     # If the above fails, try with more compatible format
     if [ $download_status -ne 0 ]; then
-        echo "First attempt failed. Trying with more compatible format..."
+        echo "$PREFIX First attempt failed. Trying with more compatible format..."
         
         # Reset options for second attempt
         DOWNLOAD_OPTS=(
@@ -373,7 +383,7 @@ download_video() {
             
         # If that also fails, try with simpler format
         if [ $download_status -ne 0 ]; then
-            echo "Second attempt failed. Trying with simple format..."
+            echo "$PREFIX Second attempt failed. Trying with simple format..."
             
             # Reset options for third attempt
             DOWNLOAD_OPTS=(
@@ -399,23 +409,32 @@ download_video() {
     # Record the video as downloaded if any download attempt succeeded
     if [ $download_status -eq 0 ]; then
         record_downloaded_video "$VIDEO_URL" "$CREATOR_FOLDER"
+        echo "$PREFIX Successfully downloaded video to: $CREATOR_NAME"
+    else
+        echo "$PREFIX Failed to download: $VIDEO_URL"
     fi
     
     # Clean up any leftover thumbnail files
-    echo "Cleaning up any leftover thumbnail files in $CREATOR_FOLDER..."
+    echo "$PREFIX Cleaning up any leftover thumbnail files in $CREATOR_FOLDER..."
     find "$CREATOR_FOLDER" -name "*.jpg" -type f -delete
 }
 
-# Process each source URL
-for URL in "${VIDEO_SOURCES[@]}"; do
-    echo "Processing source: $URL..."
+# Function to process a single source
+process_source() {
+    local URL="$1"
+    local SOURCE_NUM="$2"
+    
+    # Create a unique prefix for this source's output
+    local PREFIX="[Source $SOURCE_NUM]"
+    
+    echo "$PREFIX Processing source: $URL..."
 
     # Check if the URL is a playlist
     if [[ "$URL" == *"/playlist"* ]]; then
-        echo "Handling playlist: $URL"
+        echo "$PREFIX Handling playlist: $URL"
         
         # First extract all video IDs from the playlist
-        echo "Extracting videos from playlist..."
+        echo "$PREFIX Extracting videos from playlist..."
         
         # Set up extract command
         EXTRACT_OPTS=(
@@ -432,45 +451,89 @@ for URL in "${VIDEO_SOURCES[@]}"; do
         
         # Check if we got any video IDs
         if [[ -z "$VIDEO_IDS" ]]; then
-            echo "Failed to extract videos from playlist $URL. Skipping..."
-            continue
+            echo "$PREFIX Failed to extract videos from playlist $URL. Skipping..."
+            return
         fi
         
         # Process each video in the playlist
-        echo "Processing individual videos from playlist..."
+        echo "$PREFIX Processing individual videos from playlist..."
         while IFS= read -r VIDEO_ID; do
             if [[ -n "$VIDEO_ID" ]]; then
                 VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
-                download_video "$VIDEO_URL"
+                download_video "$VIDEO_URL" "$SOURCE_NUM"
             fi
         done <<< "$VIDEO_IDS"
         
     else
         if [[ "$URL" == *"youtu.be"* || "$URL" == *"youtube.com/watch"* ]]; then
             # Single video
-            download_video "$URL"
+            download_video "$URL" "$SOURCE_NUM"
         else
             # Channel - extract all video IDs first
-            echo "Handling channel: $URL"
+            echo "$PREFIX Handling channel: $URL"
             
             # Get channel videos
             CHANNEL_VIDEOS=$(timeout 60s "$DOWNLOADER_PATH" --flat-playlist --print "%(id)s" "$URL/videos" 2>/dev/null)
             
             # Check if we got any video IDs
             if [[ -z "$CHANNEL_VIDEOS" ]]; then
-                echo "Failed to extract videos from channel $URL. Skipping..."
-                continue
+                echo "$PREFIX Failed to extract videos from channel $URL. Skipping..."
+                return
             fi
 
             while IFS= read -r VIDEO_ID; do
                 if [[ -n "$VIDEO_ID" ]]; then
                     VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
-                    download_video "$VIDEO_URL"
+                    download_video "$VIDEO_URL" "$SOURCE_NUM"
                 fi
             done <<< "$CHANNEL_VIDEOS"
         fi
     fi
+    
+    echo "$PREFIX Completed processing source: $URL"
+}
+
+# Process all sources with parallel limit
+echo "Starting processing of ${#VIDEO_SOURCES[@]} sources with parallel limit of $PARALLEL_LIMIT..."
+pids=()
+source_count=0
+
+for URL in "${VIDEO_SOURCES[@]}"; do
+    # Wait if we've reached the parallel limit
+    while [ ${#pids[@]} -ge $PARALLEL_LIMIT ]; do
+        # Check for completed processes
+        new_pids=()
+        for pid in "${pids[@]}"; do
+            if kill -0 $pid 2>/dev/null; then
+                new_pids+=($pid)
+            else
+                wait $pid
+                echo "Source process $pid completed"
+            fi
+        done
+        pids=("${new_pids[@]}")
+        
+        # Small delay to avoid busy waiting
+        if [ ${#pids[@]} -ge $PARALLEL_LIMIT ]; then
+            sleep 1
+        fi
+    done
+    
+    # Start new source process
+    ((source_count++))
+    process_source "$URL" "$source_count" &
+    pids+=($!)
+    echo "Started processing source $source_count: $URL (PID: $!)"
 done
+
+# Wait for all remaining background processes to complete
+echo "Waiting for remaining source downloads to complete..."
+for pid in "${pids[@]}"; do
+    wait $pid
+    echo "Source process $pid completed"
+done
+
+echo "All source downloads completed!"
 
 echo "All video downloads completed. Videos saved to $BASE_FOLDER."
 
