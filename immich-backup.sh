@@ -15,12 +15,9 @@ if [ -z "$TMUX" ] && [ "$1" != "--inside-tmux" ]; then
     exit 0
 fi
 
-# Variables
-BACKUP_DIR="/backups/Immich Panel"
-LOG_DIR="$BACKUP_DIR/logs"
-DATE=$(date +"%m.%d.%Y-%H.%M")
-BACKUP_FILE="dump-$DATE.sql.gz"
-LOG_FILE="$LOG_DIR/log-$DATE.log"
+# Source environment variables
+SCRIPT_DIR=$(dirname "$0")
+source "$SCRIPT_DIR/.immich-env"
 
 # Ensure the log file is created before any output
 touch "$LOG_FILE"
